@@ -67,7 +67,7 @@ local SPRING_HEADING_SCALE     = (2 * math.pi) / 65536
 --------------------------------------------------------------------------------
 local CMD_ATTACK               = CMD.ATTACK or 16
 local CMD_SET_TARGET           = (CMD and CMD.SET_TARGET) or 34923
-local CMD_MANUALFIRE           = (CMD and CMD.MANUALFIRE) or 20 -- D-Gun & Nuke Launch
+local CMD_MANUALFIRE           = (CMD and CMD.MANUALFIRE) or 20
 local CMD_STOCKPILE            = (CMD and CMD.STOCKPILE) or 100
 
 local DRAG_PIXEL_THRESHOLD     = 8 -- Screen pixels before engaging carpet barrage
@@ -91,11 +91,11 @@ local pendingSalvos            = {}
 local unitWeaponCache          = {}
 
 --------------------------------------------------------------------------------
--- HELPER: DYNAMIC LAUNCH & CARPET COMMAND RESOLVER
+-- DYNAMIC COMMAND RESOLVER (ATTACK, SET TARGET, LAUNCH)
 --------------------------------------------------------------------------------
 local function GetUnitCommandIDByName(unitID, keyword)
-	local cmdDescs = spGetUnitCmdDescs(unitID)
-	if cmdDescs then
+	local ok, cmdDescs = pcall(spGetUnitCmdDescs, unitID)
+	if ok and cmdDescs then
 		local kw = string.lower(keyword)
 		for i = 1, #cmdDescs do
 			local d = cmdDescs[i]
@@ -110,15 +110,15 @@ local function GetUnitCommandIDByName(unitID, keyword)
 	return nil
 end
 
-local function IsCarpetCommand(cmdID, cmdName)
+local function IsCarpetCommand(cmdID, cmdName, cmdIndex)
 	if cmdID and (cmdID == CMD_ATTACK or cmdID == 16 or cmdID == CMD_SET_TARGET or cmdID == 34923 or cmdID == CMD_MANUALFIRE or cmdID == 20) then
 		return true
 	end
 
-	-- Check active command descriptor directly from engine
-	if spGetActiveCmdDesc then
-		local desc = spGetActiveCmdDesc()
-		if desc then
+	-- Safely check command descriptor using cmdIndex
+	if cmdIndex and spGetActiveCmdDesc then
+		local ok, desc = pcall(spGetActiveCmdDesc, cmdIndex)
+		if ok and desc then
 			if desc.name then
 				local s = string.lower(desc.name)
 				if s:find("launch") or s:find("attack") or s:find("target") or s:find("fire") then
@@ -145,7 +145,7 @@ local function IsCarpetCommand(cmdID, cmdName)
 end
 
 --------------------------------------------------------------------------------
--- WEAPON & BALLISTICS ENGINE (COVERS ARTILLERY, TANKS, SILOS & NUKES)
+-- WEAPON & BALLISTICS ENGINE (ARTILLERY, ROCKETS, SILOS, NUKES)
 --------------------------------------------------------------------------------
 local function GetUnitWeaponInfo(unitDefID)
 	if unitWeaponCache[unitDefID] ~= nil then
@@ -158,7 +158,7 @@ local function GetUnitWeaponInfo(unitDefID)
 		return false
 	end
 
-	-- 1. Check if unit is a Missile Silo (Nuclear Silo / Tactical Missile / Juno)
+	-- 1. Check if unit is a Missile Silo (Nuke Silo / Tactical Missile / Juno)
 	if udef.canStockpile then
 		local bestWeapon = nil
 		if udef.weapons and #udef.weapons > 0 then
@@ -181,7 +181,7 @@ local function GetUnitWeaponInfo(unitDefID)
 			minRange     = (bestWeapon and bestWeapon.minRange) or 0,
 			aoe          = max(80, aoeRadius),
 			projSpeed    = max(150, (bestWeapon and bestWeapon.projectilespeed) or 300),
-			isBallistic  = false, -- Missiles fly guided or vertical trajectory
+			isBallistic  = false,
 			highTraj     = true,
 			turnRate     = 1.0,
 			isSilo       = true,
@@ -421,7 +421,10 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 				local readyStock, queuedStock = 0, 0
 				if winfo.isSilo then
 					isSiloBarrage = true
-					readyStock, queuedStock = spGetUnitStockpile(uid)
+					local ok, rs, qs = pcall(spGetUnitStockpile, uid)
+					if ok then
+						readyStock, queuedStock = rs or 0, qs or 0
+					end
 				end
 
 				validUnits[#validUnits + 1] = {
@@ -440,9 +443,7 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 	if #validUnits == 0 then return nil end
 	local avgAoE = totalAoE / #validUnits
 
-	-- Determine how many barrage points to generate:
-	-- If multiple units: 1 point per unit.
-	-- If single unit: based on stockpile ready/queued missiles (default 3-4 points creeping barrage).
+	-- Determine points to generate:
 	local totalPoints = #validUnits
 	local singleUnitRepeats = false
 
@@ -452,7 +453,7 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 			local totalMissiles = (u.stockReady > 0 and u.stockReady) or (u.stockQueued > 0 and u.stockQueued) or 3
 			totalPoints = max(2, min(6, totalMissiles))
 		else
-			totalPoints = 4 -- Creeping barrage for single artillery/tank
+			totalPoints = 4
 		end
 		singleUnitRepeats = true
 	end
@@ -481,7 +482,6 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 	local maxReadyTime = 0
 
 	if singleUnitRepeats then
-		-- Single unit firing multiple queued shots along the line
 		local u = validUnits[1]
 		for k = 1, #targets do
 			local t = targets[k]
@@ -500,12 +500,11 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 				flightTime = flightTime,
 				slewTime   = slewTime,
 				readyTime  = slewTime + flightTime,
-				isQueued   = (k > 1), -- Queue subsequent shots
+				isQueued   = (k > 1),
 			}
 			maxReadyTime = max(maxReadyTime, slewTime + flightTime)
 		end
 	else
-		-- Multi-unit parallel volley
 		local pairings = MatchUnitsToTargetsZeroCrisscross(validUnits, targets, { dirX, dirZ })
 		for k = 1, #pairings do
 			local p = pairings[k]
@@ -575,7 +574,6 @@ local function ExecuteCarpetBarrage(plan, shiftHeld)
 
 	for i = 1, #plan.elements do
 		local elem = plan.elements[i]
-		-- Resolve exact unit launch command if Silo
 		local cmdToIssue = plan.commandID
 		if plan.isSilo then
 			local siloCmd = GetUnitCommandIDByName(elem.unitID, "launch")
@@ -605,7 +603,9 @@ local function ExecuteCarpetBarrage(plan, shiftHeld)
 	end
 
 	pcall(spPlaySoundFile, "beep4", 0.70, "ui")
-	spEcho(string.format("[Carpet Barrage] Salvo deployed: %d warheads synchronized!", #plan.elements))
+	if spEcho then
+		spEcho(string.format("[Carpet Barrage] Salvo deployed: %d warheads synchronized!", #plan.elements))
+	end
 end
 
 function widget:GameFrame(frame)
@@ -637,7 +637,7 @@ function widget:GameFrame(frame)
 end
 
 --------------------------------------------------------------------------------
--- MOUSE & COMMAND HOOKS ("กดที่ปุ่มเดิมเลย: Attack, Set Target, Launch")
+-- MOUSE & COMMAND HOOKS
 --------------------------------------------------------------------------------
 function widget:MousePress(mx, my, button)
 	if spIsGUIHidden and spIsGUIHidden() then return false end
@@ -666,10 +666,10 @@ function widget:MousePress(mx, my, button)
 		end
 	end
 
-	-- Intercepting Active In-Game Command (Attack, Set Target, Launch, etc.)
+	-- Intercepting Active In-Game Command (Attack, Set Target, Launch)
 	if button == 1 then
-		local _, activeCmdID, _, activeCmdName = spGetActiveCommand()
-		if IsCarpetCommand(activeCmdID, activeCmdName) then
+		local cmdIndex, activeCmdID, _, activeCmdName = spGetActiveCommand()
+		if IsCarpetCommand(activeCmdID, activeCmdName, cmdIndex) then
 			local sel = spGetSelectedUnits()
 			if sel and #sel >= 1 then
 				local gpos, tid = GetGroundPosFromMouse(mx, my)
@@ -723,11 +723,10 @@ function widget:MouseRelease(mx, my, button)
 	dragShiftHeld = shift or dragShiftHeld
 
 	if hasDraggedPastThreshold and activeBarragePreview and activeBarragePreview.totalUnits >= 1 then
-		-- 1. Executed Dragged Carpet Barrage!
 		ExecuteCarpetBarrage(activeBarragePreview, dragShiftHeld)
 		spSetActiveCommand(0)
 	else
-		-- 2. It was a single click without dragging: pass through normal command smoothly!
+		-- Single click passthrough
 		local sel = spGetSelectedUnits()
 		if sel and #sel > 0 then
 			local options = dragShiftHeld and { "shift" } or {}
@@ -739,8 +738,13 @@ function widget:MouseRelease(mx, my, button)
 			end
 
 			if targetParams then
+				local cmdToIssue = dragCommandID
+				local uid = sel[1]
+				local siloCmd = GetUnitCommandIDByName(uid, "launch")
+				if siloCmd then cmdToIssue = siloCmd end
+
 				for i = 1, #sel do
-					spGiveOrderToUnit(sel[i], dragCommandID, targetParams, options)
+					spGiveOrderToUnit(sel[i], cmdToIssue, targetParams, options)
 				end
 			end
 		end
@@ -830,10 +834,8 @@ function widget:DrawWorld()
 		local tp = elem.targetPos
 		local up = elem.unitPos
 
-		-- 1. Holographic Impact Zone
 		DrawGroundRing(tp[1], tp[2], tp[3], elem.aoe, ringR, ringG, ringB, 0.85 * pulse)
 
-		-- 2. Inner Crosshair
 		local chSize = elem.aoe * 0.45
 		glColor(ringR, ringG, ringB, 0.8 * pulse)
 		glLineWidth(1.8)
@@ -844,11 +846,9 @@ function widget:DrawWorld()
 			glVertex(tp[1], tp[2] + 5, tp[3] + chSize)
 		end)
 
-		-- 3. Parabolic Trajectory Arc from Muzzle to Target
 		DrawParabolicLaserArc(up, tp, ringR, ringG, ringB, 0.75)
 	end
 
-	-- Connecting Barrage Boundary Line
 	if #elems >= 2 then
 		glColor(ringR, ringG, ringB, 0.65)
 		glLineWidth(2.2)
