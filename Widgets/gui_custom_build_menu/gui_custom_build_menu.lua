@@ -2776,7 +2776,7 @@ local function getDetailedUnitIntel(def, item)
 				if reload < 0.05 then reload = 0.05 end
 				wItem.reload = math.floor(reload * 100 + 0.5) / 100
 				wItem.range = math.floor(wDef.range or 0)
-				wItem.aoe = math.floor(wDef.areaOfEffect or 0)
+				wItem.aoe = math.floor(wDef.damageAreaOfEffect or 0)
 				wItem.edge = math.floor((wDef.edgeEffectiveness or 0.15) * 100)
 				wItem.projSpeed = wDef.projectilespeed and math.floor(wDef.projectilespeed * 30) or nil
 				wItem.isShield = wDef.isShield or (wDef.shieldPower and wDef.shieldPower > 0)
@@ -2832,7 +2832,7 @@ local function getDetailedUnitIntel(def, item)
 		local damage = tonumber(wDef.damages and (wDef.damages[1] or wDef.damages[0] or wDef.damages.default) or 0) or 0
 		intel.deathExplosion = {
 			name = "Death Explosion",
-			aoe = math.floor(wDef.areaOfEffect or 18),
+			aoe = math.floor(wDef.damageAreaOfEffect or 18),
 			edge = math.floor((wDef.edgeEffectiveness or 0) * 100),
 			burst = math.floor(damage)
 		}
@@ -2842,7 +2842,7 @@ local function getDetailedUnitIntel(def, item)
 		local damage = tonumber(wDef.damages and (wDef.damages[1] or wDef.damages[0] or wDef.damages.default) or 0) or 0
 		intel.selfDestruct = {
 			name = "Self Destruct",
-			aoe = math.floor(wDef.areaOfEffect or 30),
+			aoe = math.floor(wDef.damageAreaOfEffect or 30),
 			edge = math.floor((wDef.edgeEffectiveness or 0) * 100),
 			burst = math.floor(damage)
 		}

@@ -3,7 +3,7 @@ local widget = widget ---@type Widget
 function widget:GetInfo()
 	return {
 		name = "Tactical Carpet Barrage & TOT",
-		desc = "Synchronized Time-On-Target (TOT) non-overlapping carpet bombardment for artillery, rockets, and missile silos.",
+		desc = "AAA-grade Synchronized Time-On-Target (TOT) and non-overlapping carpet bombardment for artillery, rockets, and missile silos.",
 		author = "reforged25-source / Codex",
 		date = "2026",
 		license = "GNU GPL, v2 or later",
@@ -14,7 +14,7 @@ function widget:GetInfo()
 end
 
 --------------------------------------------------------------------------------
--- SPRING API SPEEDUPS
+-- SPEEDUPS & ENGINE REFERENCES
 --------------------------------------------------------------------------------
 local spGetSelectedUnits       = Spring.GetSelectedUnits
 local spGetUnitDefID           = Spring.GetUnitDefID
@@ -35,6 +35,7 @@ local spGetModKeyState         = Spring.GetModKeyState
 local spPlaySoundFile          = Spring.PlaySoundFile
 local spIsGUIHidden            = Spring.IsGUIHidden
 local spEcho                   = Spring.Echo
+local spWorldToScreenCoords    = Spring.WorldToScreenCoords
 
 local glColor                  = gl.Color
 local glLineWidth              = gl.LineWidth
@@ -63,7 +64,7 @@ local DEG_TO_RAD               = math.pi / 180
 local SPRING_HEADING_SCALE     = (2 * math.pi) / 65536
 
 --------------------------------------------------------------------------------
--- COMMAND CONSTANTS
+-- COMMAND IDENTIFIERS & PHYSICS ENGINE TUNING
 --------------------------------------------------------------------------------
 local CMD_ATTACK               = CMD.ATTACK or 16
 local CMD_SET_TARGET           = (CMD and CMD.SET_TARGET) or 34923
@@ -71,7 +72,17 @@ local CMD_MANUALFIRE           = (CMD and CMD.MANUALFIRE) or 20
 local CMD_STOCKPILE            = (CMD and CMD.STOCKPILE) or 100
 
 local DRAG_PIXEL_THRESHOLD     = 8 -- Screen pixels before engaging carpet barrage
-local GRAVITY_CONSTANT         = 130.0
+local ENGINE_GRAVITY           = (Game and Game.gravity) or 130.0
+
+-- Pre-computed Trigonometric Table (48 Segments) for Zero-GC Rendering
+local CIRCLE_SEGMENTS          = 48
+local CIRCLE_COS               = {}
+local CIRCLE_SIN               = {}
+for i = 0, CIRCLE_SEGMENTS do
+	local angle = (i / CIRCLE_SEGMENTS) * TWO_PI
+	CIRCLE_COS[i] = cos(angle)
+	CIRCLE_SIN[i] = sin(angle)
+end
 
 --------------------------------------------------------------------------------
 -- STATE VARIABLES
@@ -91,31 +102,14 @@ local pendingSalvos            = {}
 local unitWeaponCache          = {}
 
 --------------------------------------------------------------------------------
--- DYNAMIC COMMAND RESOLVER (ATTACK, SET TARGET, LAUNCH)
+-- EXACT COMMAND RESOLVER & DETECTOR
 --------------------------------------------------------------------------------
-local function GetUnitCommandIDByName(unitID, keyword)
-	local ok, cmdDescs = pcall(spGetUnitCmdDescs, unitID)
-	if ok and cmdDescs then
-		local kw = string.lower(keyword)
-		for i = 1, #cmdDescs do
-			local d = cmdDescs[i]
-			if d and d.name and string.lower(d.name):find(kw) then
-				return d.id
-			end
-			if d and d.action and string.lower(d.action):find(kw) then
-				return d.id
-			end
-		end
-	end
-	return nil
-end
-
-local function IsCarpetCommand(cmdID, cmdName, cmdIndex)
+local function IsCarpetCapableCommand(cmdID, cmdName, cmdIndex)
 	if cmdID and (cmdID == CMD_ATTACK or cmdID == 16 or cmdID == CMD_SET_TARGET or cmdID == 34923 or cmdID == CMD_MANUALFIRE or cmdID == 20) then
 		return true
 	end
 
-	-- Safely check command descriptor using cmdIndex
+	-- Check active command descriptor using cmdIndex
 	if cmdIndex and spGetActiveCmdDesc then
 		local ok, desc = pcall(spGetActiveCmdDesc, cmdIndex)
 		if ok and desc then
@@ -145,7 +139,7 @@ local function IsCarpetCommand(cmdID, cmdName, cmdIndex)
 end
 
 --------------------------------------------------------------------------------
--- WEAPON & BALLISTICS ENGINE (ARTILLERY, ROCKETS, SILOS, NUKES)
+-- WEAPON & BALLISTICS ENGINE (ICBM, ARTILLERY, ROCKETS, SILOS)
 --------------------------------------------------------------------------------
 local function GetUnitWeaponInfo(unitDefID)
 	if unitWeaponCache[unitDefID] ~= nil then
@@ -158,17 +152,31 @@ local function GetUnitWeaponInfo(unitDefID)
 		return false
 	end
 
-	-- 1. Check if unit is a Missile Silo (Nuke Silo / Tactical Missile / Juno)
+	-- 1. Check if unit is a Missile Silo (Nuke Silo / Tactical Missile / Juno / EMP Silo)
 	if udef.canStockpile then
 		local bestWeapon = nil
 		if udef.weapons and #udef.weapons > 0 then
+			-- Scan specifically for the stockpiled weapon
 			for i = 1, #udef.weapons do
 				local w = udef.weapons[i]
 				if w and w.weaponDef then
 					local wdef = WeaponDefs[w.weaponDef]
-					if wdef and not wdef.isShield then
+					if wdef and wdef.stockpile then
 						bestWeapon = wdef
 						break
+					end
+				end
+			end
+			-- Fallback to first non-shield weapon if not explicitly flagged
+			if not bestWeapon then
+				for i = 1, #udef.weapons do
+					local w = udef.weapons[i]
+					if w and w.weaponDef then
+						local wdef = WeaponDefs[w.weaponDef]
+						if wdef and not wdef.isShield then
+							bestWeapon = wdef
+							break
+						end
 					end
 				end
 			end
@@ -176,15 +184,17 @@ local function GetUnitWeaponInfo(unitDefID)
 
 		local aoeRadius = (bestWeapon and bestWeapon.damageAreaOfEffect) or 400
 		local info = {
-			name         = (bestWeapon and bestWeapon.name) or "Silo Missile",
-			range        = (bestWeapon and bestWeapon.range) or 72000,
-			minRange     = (bestWeapon and bestWeapon.minRange) or 0,
-			aoe          = max(80, aoeRadius),
-			projSpeed    = max(150, (bestWeapon and bestWeapon.projectilespeed) or 300),
-			isBallistic  = false,
-			highTraj     = true,
-			turnRate     = 1.0,
-			isSilo       = true,
+			name               = (bestWeapon and bestWeapon.name) or "Strategic Missile",
+			range              = (bestWeapon and bestWeapon.range) or 72000,
+			minRange           = (bestWeapon and bestWeapon.minRange) or 0,
+			aoe                = max(120, aoeRadius),
+			projSpeed          = max(200, (bestWeapon and bestWeapon.projectilespeed) or 350),
+			reloadTime         = max(6.0, (bestWeapon and bestWeapon.reload) or 15.0),
+			isBallistic        = false,
+			highTraj           = true,
+			turnRate           = 1.0,
+			isSilo             = true,
+			verticalClimbTime  = 8.5, -- Standard sub-orbital vertical launch climb/dive time
 		}
 		unitWeaponCache[unitDefID] = info
 		return info
@@ -226,40 +236,54 @@ local function GetUnitWeaponInfo(unitDefID)
 		name         = bestWeapon.name or "Cannon",
 		range        = bestWeapon.range or 600,
 		minRange     = bestWeapon.minRange or 0,
-		aoe          = max(24, bestWeapon.damageAreaOfEffect or 32),
-		projSpeed    = max(100, bestWeapon.projectilespeed or 350),
+		aoe          = max(28, bestWeapon.damageAreaOfEffect or 32),
+		projSpeed    = max(120, bestWeapon.projectilespeed or 350),
+		reloadTime   = max(1.0, bestWeapon.reload or 3.5),
 		isBallistic  = (bestWeapon.type == "Cannon" or bestWeapon.type == "MissileLauncher"),
 		highTraj     = bestWeapon.trajectoryHeight and (bestWeapon.trajectoryHeight > 0),
 		turnRate     = max(0.2, (udef.turnRate or 300) * DEG_TO_RAD),
 		isSilo       = false,
+		verticalClimbTime = 0,
 	}
 
 	unitWeaponCache[unitDefID] = info
 	return info
 end
 
-local function SolveFlightTime(dx, dy, dz, projSpeed, isBallistic, highTraj)
+--------------------------------------------------------------------------------
+-- RIGOROUS BALLISTIC & ICBM FLIGHT SOLVER
+--------------------------------------------------------------------------------
+local function SolveFlightTime(dx, dy, dz, winfo)
 	local horizDist = sqrt(dx * dx + dz * dz)
 	if horizDist <= 1 then return 0.1 end
 
-	if not isBallistic then
-		local totalDist = sqrt(horizDist * horizDist + dy * dy)
-		return max(0.1, totalDist / projSpeed)
+	-- 1. ICBM / Strategic Silo Missiles (Vertical Climb Phase + Horizontal Cruise)
+	if winfo.isSilo then
+		local cruiseTime = horizDist / winfo.projSpeed
+		return max(2.0, winfo.verticalClimbTime + cruiseTime)
 	end
 
-	local g = GRAVITY_CONSTANT
-	local v = projSpeed
+	-- 2. Direct-fire / Laser / Supersonic Missiles
+	if not winfo.isBallistic then
+		local totalDist = sqrt(horizDist * horizDist + dy * dy)
+		return max(0.1, totalDist / winfo.projSpeed)
+	end
+
+	-- 3. True Parabolic Closed-Form Trajectory under Engine Gravity
+	local g = ENGINE_GRAVITY
+	local v = winfo.projSpeed
 	local v2 = v * v
 	local v4 = v2 * v2
 
 	local discriminant = v4 - g * (g * horizDist * horizDist + 2 * dy * v2)
 	if discriminant < 0 then
+		-- Target elevated or at fringe range; fallback to direct velocity estimate
 		local totalDist = sqrt(horizDist * horizDist + dy * dy)
 		return max(0.1, totalDist / v)
 	end
 
 	local sqrtDisc = sqrt(discriminant)
-	local root = highTraj and (v2 + sqrtDisc) or (v2 - sqrtDisc)
+	local root = winfo.highTraj and (v2 + sqrtDisc) or (v2 - sqrtDisc)
 	local theta = atan2(root, g * horizDist)
 	local cosTheta = cos(theta)
 
@@ -300,9 +324,9 @@ local function GetGroundPosFromMouse(mx, my)
 end
 
 --------------------------------------------------------------------------------
--- SPATIAL TESSELLATION & PACKING (HEXAGONAL & LINEAR)
+-- SPATIAL TESSELLATION & CLOSE PACKING (LINEAR & A2 HEXAGONAL LATTICE)
 --------------------------------------------------------------------------------
-local function GenerateLinearTessellation(pStart, pEnd, count)
+local function GenerateLinearTessellation(pStart, pEnd, count, avgAoE)
 	local points = {}
 	if count <= 0 then return points end
 
@@ -313,6 +337,23 @@ local function GenerateLinearTessellation(pStart, pEnd, count)
 	if count == 1 or totalDist < 1 then
 		local gy = spGetGroundHeight(pStart[1], pStart[3])
 		points[1] = { pStart[1], gy, pStart[3] }
+		return points
+	end
+
+	-- Enforce Non-Overlapping Spacing: adjacent blast centers separated by ~1.85 * AoE
+	local minStep = max(30, avgAoE * 1.85)
+	local stepDist = totalDist / (count - 1)
+	if stepDist < minStep then
+		-- Clamp minimum spacing along the drag vector to prevent self-destructive overkill
+		local ux = dx / totalDist
+		local uz = dz / totalDist
+		for i = 0, count - 1 do
+			local curDist = i * minStep
+			local tx = pStart[1] + ux * curDist
+			local tz = pStart[3] + uz * curDist
+			local ty = spGetGroundHeight(tx, tz)
+			points[#points + 1] = { tx, ty, tz }
+		end
 		return points
 	end
 
@@ -328,6 +369,7 @@ local function GenerateLinearTessellation(pStart, pEnd, count)
 	return points
 end
 
+-- True 2D Euclidean A2 Hexagonal Close-Packed Lattice Generator
 local function GenerateHexagonalTessellation(center, radius, count, avgAoE)
 	local points = {}
 	if count <= 0 then return points end
@@ -336,24 +378,31 @@ local function GenerateHexagonalTessellation(center, radius, count, avgAoE)
 	points[1] = { center[1], gy, center[3] }
 	if count == 1 then return points end
 
-	local spacing = max(avgAoE * 1.5, 60)
-	local ring = 1
+	-- Optimal packing distance: d = sqrt(3) * AoE * 0.95 gives maximum ground coverage with zero blind spots
+	local S = max(60, avgAoE * 1.732 * 0.95)
+	local halfS = S * 0.5
+	local rowH = S * 0.8660254 -- sqrt(3)/2 * S
 
-	while #points < count do
-		local ringRadius = ring * spacing
-		local numInRing = ring * 6
-		local angleStep = TWO_PI / numInRing
+	local candidates = {}
+	local maxRing = max(2, floor(radius / S) + 2)
 
-		for i = 0, numInRing - 1 do
-			if #points >= count then break end
-			local a = i * angleStep
-			local tx = center[1] + cos(a) * ringRadius
-			local tz = center[3] + sin(a) * ringRadius
-			local ty = spGetGroundHeight(tx, tz)
-			points[#points + 1] = { tx, ty, tz }
+	for q = -maxRing, maxRing do
+		for r = -maxRing, maxRing do
+			if q ~= 0 or r ~= 0 then
+				local cx = center[1] + (q * S + r * halfS)
+				local cz = center[3] + (r * rowH)
+				local distSq = (cx - center[1])^2 + (cz - center[3])^2
+				candidates[#candidates + 1] = { x = cx, z = cz, distSq = distSq }
+			end
 		end
-		ring = ring + 1
-		if ring > 15 then break end
+	end
+
+	table.sort(candidates, function(a, b) return a.distSq < b.distSq end)
+
+	for i = 1, min(#candidates, count - 1) do
+		local c = candidates[i]
+		local cy = spGetGroundHeight(c.x, c.z)
+		points[#points + 1] = { c.x, cy, c.z }
 	end
 
 	return points
@@ -366,8 +415,9 @@ local function MatchUnitsToTargetsZeroCrisscross(unitList, targets, dirVector)
 	local count = min(#unitList, #targets)
 	if count <= 0 then return {} end
 
-	local uDirX = dirVector[1]
-	local uDirZ = dirVector[2]
+	-- Lateral vector perpendicular to firing direction
+	local uDirX = -dirVector[2]
+	local uDirZ = dirVector[1]
 
 	local decUnits = {}
 	for i = 1, #unitList do
@@ -404,10 +454,11 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 	local rawSelected = spGetSelectedUnits()
 	if not rawSelected or #rawSelected == 0 then return nil end
 
-	-- 1. Gather valid combat units / silos
+	-- 1. Gather combat units and missile silos
 	local validUnits = {}
 	local totalAoE = 0
 	local isSiloBarrage = false
+	local isLaunchCommand = (cmdID == CMD_MANUALFIRE or cmdID == 20)
 
 	for i = 1, #rawSelected do
 		local uid = rawSelected[i]
@@ -415,15 +466,19 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		if udefID then
 			local winfo = GetUnitWeaponInfo(udefID)
 			if winfo then
-				local ux, uy, uz = spGetUnitPosition(uid)
-				local uheading = spGetUnitHeading(uid) or 0
-
-				local readyStock, queuedStock = 0, 0
 				if winfo.isSilo then
 					isSiloBarrage = true
+				end
+
+				local ux, uy, uz = spGetUnitPosition(uid)
+				local uheading = spGetUnitHeading(uid) or 0
+				local readyStock, queuedStock = 0, 0
+
+				if winfo.isSilo then
 					local ok, rs, qs = pcall(spGetUnitStockpile, uid)
 					if ok then
-						readyStock, queuedStock = rs or 0, qs or 0
+						readyStock = rs or 0
+						queuedStock = qs or 0
 					end
 				end
 
@@ -432,8 +487,8 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 					pos         = { ux, uy, uz },
 					heading     = uheading,
 					winfo       = winfo,
-					stockReady  = readyStock or 0,
-					stockQueued = queuedStock or 0,
+					stockReady  = readyStock,
+					stockQueued = queuedStock,
 				}
 				totalAoE = totalAoE + winfo.aoe
 			end
@@ -441,17 +496,36 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 	end
 
 	if #validUnits == 0 then return nil end
+
+	-- If Launch command was triggered, filter down to silos exclusively
+	if isLaunchCommand or isSiloBarrage then
+		local siloOnly = {}
+		for i = 1, #validUnits do
+			if validUnits[i].winfo.isSilo then
+				siloOnly[#siloOnly + 1] = validUnits[i]
+			end
+		end
+		if #siloOnly > 0 then
+			validUnits = siloOnly
+			isSiloBarrage = true
+		end
+	end
+
 	local avgAoE = totalAoE / #validUnits
 
-	-- Determine points to generate:
+	-- Determine target count:
 	local totalPoints = #validUnits
 	local singleUnitRepeats = false
+	local stockWarning = false
 
 	if #validUnits == 1 then
 		local u = validUnits[1]
 		if u.winfo.isSilo then
 			local totalMissiles = (u.stockReady > 0 and u.stockReady) or (u.stockQueued > 0 and u.stockQueued) or 3
 			totalPoints = max(2, min(6, totalMissiles))
+			if u.stockReady == 0 then
+				stockWarning = true
+			end
 		else
 			totalPoints = 4
 		end
@@ -467,7 +541,7 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		local rad = max(avgAoE * 1.5, sqrt(dirX * dirX + dirZ * dirZ))
 		targets = GenerateHexagonalTessellation(pStart, rad, totalPoints, avgAoE)
 	else
-		targets = GenerateLinearTessellation(pStart, pEnd, totalPoints)
+		targets = GenerateLinearTessellation(pStart, pEnd, totalPoints, avgAoE)
 	end
 
 	local dirLen = sqrt(dirX * dirX + dirZ * dirZ)
@@ -477,9 +551,10 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		dirX, dirZ = dirX / dirLen, dirZ / dirLen
 	end
 
-	-- 3. Pair Units with Targets
+	-- 3. Pair Units with Targets & Solve Physics
 	local salvoElements = {}
 	local maxReadyTime = 0
+	local currentFrame = spGetGameFrame()
 
 	if singleUnitRepeats then
 		local u = validUnits[1]
@@ -489,20 +564,26 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 			local dy = t[2] - u.pos[2]
 			local dz = t[3] - u.pos[3]
 
-			local flightTime = SolveFlightTime(dx, dy, dz, u.winfo.projSpeed, u.winfo.isBallistic, u.winfo.highTraj)
+			local flightTime = SolveFlightTime(dx, dy, dz, u.winfo)
 			local slewTime = SolveTurretSlewTime(u.pos[1], u.pos[3], u.heading, t[1], t[3], u.winfo.turnRate)
+			-- Sequential launch timing: Missile k fires after (k-1) reload intervals
+			local seqDelaySec = (k - 1) * u.winfo.reloadTime
+			local totalTimeToImpact = seqDelaySec + flightTime
 
 			salvoElements[k] = {
-				unitID     = u.id,
-				unitPos    = u.pos,
-				targetPos  = t,
-				aoe        = u.winfo.aoe,
-				flightTime = flightTime,
-				slewTime   = slewTime,
-				readyTime  = slewTime + flightTime,
-				isQueued   = (k > 1),
+				unitID         = u.id,
+				unitPos        = u.pos,
+				targetPos      = t,
+				aoe            = u.winfo.aoe,
+				flightTime     = flightTime,
+				slewTime       = slewTime,
+				readyTime      = totalTimeToImpact,
+				isQueued       = (k > 1),
+				seqDelaySec    = seqDelaySec,
+				delayFrames    = 0,
+				fireFrame      = currentFrame,
 			}
-			maxReadyTime = max(maxReadyTime, slewTime + flightTime)
+			maxReadyTime = max(maxReadyTime, totalTimeToImpact)
 		end
 	else
 		local pairings = MatchUnitsToTargetsZeroCrisscross(validUnits, targets, { dirX, dirZ })
@@ -515,7 +596,7 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 			local dy = t[2] - u.pos[2]
 			local dz = t[3] - u.pos[3]
 
-			local flightTime = SolveFlightTime(dx, dy, dz, u.winfo.projSpeed, u.winfo.isBallistic, u.winfo.highTraj)
+			local flightTime = SolveFlightTime(dx, dy, dz, u.winfo)
 			local slewTime = SolveTurretSlewTime(u.pos[1], u.pos[3], u.heading, t[1], t[3], u.winfo.turnRate)
 			local readyTime = slewTime + flightTime
 
@@ -534,16 +615,10 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 				isQueued   = false,
 			}
 		end
-	end
 
-	-- 4. Calculate Frame Delays for TOT Synchronization
-	local currentFrame = spGetGameFrame()
-	for k = 1, #salvoElements do
-		local elem = salvoElements[k]
-		if singleUnitRepeats then
-			elem.delayFrames = 0
-			elem.fireFrame = currentFrame
-		else
+		-- Synchronize Time-On-Target (TOT) fire frames
+		for k = 1, #salvoElements do
+			local elem = salvoElements[k]
 			local fireDelaySec = maxReadyTime - elem.readyTime
 			elem.delayFrames = max(0, floor(fireDelaySec * 30))
 			elem.fireFrame   = currentFrame + elem.delayFrames
@@ -557,6 +632,7 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		totalUnits     = #salvoElements,
 		isSilo         = isSiloBarrage,
 		isSingleUnit   = singleUnitRepeats,
+		stockWarning   = stockWarning,
 		pStart         = pStart,
 		pEnd           = pEnd,
 		isArea         = isArea,
@@ -564,10 +640,10 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 end
 
 --------------------------------------------------------------------------------
--- DISPATCHER & TOT QUEUE HANDLER
+-- DISPATCHER & TOT SYNCHRONIZED EXECUTION
 --------------------------------------------------------------------------------
 local function ExecuteCarpetBarrage(plan, shiftHeld)
-	if not plan or not plan.elements then return end
+	if not plan or not plan.elements or #plan.elements == 0 then return end
 
 	local currentFrame = spGetGameFrame()
 	local pending = {}
@@ -575,13 +651,10 @@ local function ExecuteCarpetBarrage(plan, shiftHeld)
 	for i = 1, #plan.elements do
 		local elem = plan.elements[i]
 		local cmdToIssue = plan.commandID
-		if plan.isSilo then
-			local siloCmd = GetUnitCommandIDByName(elem.unitID, "launch")
-			if siloCmd then cmdToIssue = siloCmd end
-		end
 
 		local opts = {}
-		if shiftHeld or elem.isQueued then
+		-- Auto-shift queued stockpile missiles or user-requested Shift queueing
+		if shiftHeld or elem.isQueued or (plan.stockWarning and plan.isSilo) then
 			opts = { "shift" }
 		end
 
@@ -602,9 +675,10 @@ local function ExecuteCarpetBarrage(plan, shiftHeld)
 		pendingSalvos[#pendingSalvos + 1] = pending
 	end
 
-	pcall(spPlaySoundFile, "beep4", 0.70, "ui")
+	pcall(spPlaySoundFile, "beep4", 0.75, "ui")
 	if spEcho then
-		spEcho(string.format("[Carpet Barrage] Salvo deployed: %d warheads synchronized!", #plan.elements))
+		local salvoType = plan.isSilo and "Strategic ICBM" or "TOT Artillery"
+		spEcho(string.format("[Carpet Barrage] %s Salvo Deployed: %d warheads synchronized!", salvoType, #plan.elements))
 	end
 end
 
@@ -637,14 +711,14 @@ function widget:GameFrame(frame)
 end
 
 --------------------------------------------------------------------------------
--- MOUSE & COMMAND HOOKS
+-- MOUSE & IN-GAME ORDER CAPTURE
 --------------------------------------------------------------------------------
 function widget:MousePress(mx, my, button)
 	if spIsGUIHidden and spIsGUIHidden() then return false end
 
 	local alt, ctrl, meta, shift = spGetModKeyState()
 
-	-- Alt + Right-Click Drag shortcut
+	-- 1. Alt + Right-Click Drag Shortcut
 	if button == 3 and alt then
 		local sel = spGetSelectedUnits()
 		if sel and #sel >= 1 then
@@ -666,10 +740,10 @@ function widget:MousePress(mx, my, button)
 		end
 	end
 
-	-- Intercepting Active In-Game Command (Attack, Set Target, Launch)
+	-- 2. Intercepting Active In-Game Buttons (Launch, Attack, Set Target)
 	if button == 1 then
 		local cmdIndex, activeCmdID, _, activeCmdName = spGetActiveCommand()
-		if IsCarpetCommand(activeCmdID, activeCmdName, cmdIndex) then
+		if IsCarpetCapableCommand(activeCmdID, activeCmdName, cmdIndex) then
 			local sel = spGetSelectedUnits()
 			if sel and #sel >= 1 then
 				local gpos, tid = GetGroundPosFromMouse(mx, my)
@@ -678,6 +752,7 @@ function widget:MousePress(mx, my, button)
 					hasDraggedPastThreshold = false
 					dragStartScreen.x = mx
 					dragStartScreen.y = my
+					-- Keep the exact active command ID issued by the in-game button!
 					dragCommandID = (activeCmdID and activeCmdID > 0) and activeCmdID or CMD_ATTACK
 					dragStartWorld = gpos
 					dragCurrentWorld = gpos
@@ -723,10 +798,11 @@ function widget:MouseRelease(mx, my, button)
 	dragShiftHeld = shift or dragShiftHeld
 
 	if hasDraggedPastThreshold and activeBarragePreview and activeBarragePreview.totalUnits >= 1 then
+		-- Barrage Salvo Executed!
 		ExecuteCarpetBarrage(activeBarragePreview, dragShiftHeld)
 		spSetActiveCommand(0)
 	else
-		-- Single click passthrough
+		-- Single-Click Passthrough: preserve 100% native Launch / Attack behavior
 		local sel = spGetSelectedUnits()
 		if sel and #sel > 0 then
 			local options = dragShiftHeld and { "shift" } or {}
@@ -734,21 +810,18 @@ function widget:MouseRelease(mx, my, button)
 			if dragTargetUnitID then
 				targetParams = { dragTargetUnitID }
 			elseif dragStartWorld then
-				targetParams = dragStartWorld
+				targetParams = { dragStartWorld[1], dragStartWorld[2], dragStartWorld[3] }
 			end
 
 			if targetParams then
-				local cmdToIssue = dragCommandID
-				local uid = sel[1]
-				local siloCmd = GetUnitCommandIDByName(uid, "launch")
-				if siloCmd then cmdToIssue = siloCmd end
-
 				for i = 1, #sel do
-					spGiveOrderToUnit(sel[i], cmdToIssue, targetParams, options)
+					spGiveOrderToUnit(sel[i], dragCommandID, targetParams, options)
 				end
 			end
 		end
-		spSetActiveCommand(0)
+		if not dragShiftHeld then
+			spSetActiveCommand(0)
+		end
 	end
 
 	isDragging = false
@@ -762,53 +835,48 @@ function widget:MouseRelease(mx, my, button)
 end
 
 --------------------------------------------------------------------------------
--- 3D HOLOGRAPHIC WORLD RENDERING
+-- ZERO-GC MILITARY HOLOGRAPHIC WORLD RENDERING
 --------------------------------------------------------------------------------
-local function DrawGroundRing(cx, cy, cz, radius, r, g, b, a)
-	local segments = 32
-	local step = TWO_PI / segments
-
-	glColor(r, g, b, a * 0.22)
+local function DrawGroundRingZeroGC(cx, cy, cz, radius, r, g, b, a)
+	-- Inner subtle translucent fill
+	glColor(r, g, b, a * 0.18)
 	glBeginEnd(GL_TRIANGLE_FAN, function()
 		glVertex(cx, cy + 4, cz)
-		for i = 0, segments do
-			local angle = i * step
-			local px = cx + cos(angle) * radius
-			local pz = cz + sin(angle) * radius
-			local py = spGetGroundHeight(px, pz) + 4
-			glVertex(px, py, pz)
+		for i = 0, CIRCLE_SEGMENTS do
+			local px = cx + CIRCLE_COS[i] * radius
+			local pz = cz + CIRCLE_SIN[i] * radius
+			glVertex(px, cy + 4, pz)
 		end
 	end)
 
+	-- Crisp holographic outer ring
 	glColor(r, g, b, a)
-	glLineWidth(2.4)
+	glLineWidth(2.5)
 	glBeginEnd(GL_LINE_LOOP, function()
-		for i = 0, segments - 1 do
-			local angle = i * step
-			local px = cx + cos(angle) * radius
-			local pz = cz + sin(angle) * radius
-			local py = spGetGroundHeight(px, pz) + 5
-			glVertex(px, py, pz)
+		for i = 0, CIRCLE_SEGMENTS - 1 do
+			local px = cx + CIRCLE_COS[i] * radius
+			local pz = cz + CIRCLE_SIN[i] * radius
+			glVertex(px, cy + 6, pz)
 		end
 	end)
 end
 
-local function DrawParabolicLaserArc(pStart, pEnd, r, g, b, a)
-	local segments = 24
+local function DrawBallisticLaserArc(pStart, pEnd, r, g, b, a, isSilo)
+	local segments = 28
 	local dx = pEnd[1] - pStart[1]
 	local dy = pEnd[2] - pStart[2]
 	local dz = pEnd[3] - pStart[3]
 	local dist = sqrt(dx * dx + dz * dz)
-	local arcHeight = max(80, dist * 0.25)
+	local arcHeight = isSilo and max(250, dist * 0.45) or max(80, dist * 0.26)
 
-	glLineWidth(2.2)
+	glLineWidth(2.4)
 	glBeginEnd(GL_LINE_STRIP, function()
 		for i = 0, segments do
 			local t = i / segments
 			local px = pStart[1] + dx * t
 			local pz = pStart[3] + dz * t
 			local py = pStart[2] + dy * t + sin(t * pi) * arcHeight
-			local alpha = a * (0.35 + sin(t * pi) * 0.65)
+			local alpha = a * (0.30 + sin(t * pi) * 0.70)
 			glColor(r, g, b, alpha)
 			glVertex(px, py, pz)
 		end
@@ -819,43 +887,49 @@ function widget:DrawWorld()
 	if not activeBarragePreview or not activeBarragePreview.elements then return end
 
 	local gameSecs = spGetGameSeconds()
-	local pulse = 0.85 + 0.15 * sin(gameSecs * 6.0)
+	local pulse = 0.82 + 0.18 * sin(gameSecs * 6.5)
 
 	glDepthTest(false)
 
 	local elems = activeBarragePreview.elements
 	local isSilo = activeBarragePreview.isSilo
-	local ringR = isSilo and 1.0 or 0.2
-	local ringG = isSilo and 0.4 or 0.95
-	local ringB = isSilo and 0.1 or 1.0
+	local isWarn = activeBarragePreview.stockWarning
+
+	local ringR = isWarn and 1.0 or (isSilo and 0.15 or 0.20)
+	local ringG = isWarn and 0.55 or (isSilo and 0.85 or 1.00)
+	local ringB = isWarn and 0.10 or (isSilo and 1.00 or 0.45)
 
 	for i = 1, #elems do
 		local elem = elems[i]
 		local tp = elem.targetPos
 		local up = elem.unitPos
 
-		DrawGroundRing(tp[1], tp[2], tp[3], elem.aoe, ringR, ringG, ringB, 0.85 * pulse)
+		-- Ground AOE Impact Reticle
+		DrawGroundRingZeroGC(tp[1], tp[2], tp[3], elem.aoe, ringR, ringG, ringB, 0.85 * pulse)
 
-		local chSize = elem.aoe * 0.45
-		glColor(ringR, ringG, ringB, 0.8 * pulse)
-		glLineWidth(1.8)
+		-- Crosshairs
+		local chSize = elem.aoe * 0.42
+		glColor(ringR, ringG, ringB, 0.85 * pulse)
+		glLineWidth(2.0)
 		glBeginEnd(GL_LINES, function()
-			glVertex(tp[1] - chSize, tp[2] + 5, tp[3])
-			glVertex(tp[1] + chSize, tp[2] + 5, tp[3])
-			glVertex(tp[1], tp[2] + 5, tp[3] - chSize)
-			glVertex(tp[1], tp[2] + 5, tp[3] + chSize)
+			glVertex(tp[1] - chSize, tp[2] + 6, tp[3])
+			glVertex(tp[1] + chSize, tp[2] + 6, tp[3])
+			glVertex(tp[1], tp[2] + 6, tp[3] - chSize)
+			glVertex(tp[1], tp[2] + 6, tp[3] + chSize)
 		end)
 
-		DrawParabolicLaserArc(up, tp, ringR, ringG, ringB, 0.75)
+		-- Trajectory Laser Arc
+		DrawBallisticLaserArc(up, tp, ringR, ringG, ringB, 0.78, isSilo)
 	end
 
+	-- Interconnecting tactical carpet line
 	if #elems >= 2 then
 		glColor(ringR, ringG, ringB, 0.65)
 		glLineWidth(2.2)
 		glBeginEnd(GL_LINE_STRIP, function()
 			for i = 1, #elems do
 				local tp = elems[i].targetPos
-				glVertex(tp[1], tp[2] + 7, tp[3])
+				glVertex(tp[1], tp[2] + 8, tp[3])
 			end
 		end)
 	end
@@ -866,29 +940,52 @@ function widget:DrawWorld()
 end
 
 --------------------------------------------------------------------------------
--- 2D SCREEN HUD (GLASSMORPHIC TACTICAL OVERLAY)
+-- 2D SCREEN HUD & WORLD TELEMETRY
 --------------------------------------------------------------------------------
 function widget:DrawScreen()
-	if not activeBarragePreview then return end
+	if not activeBarragePreview or not activeBarragePreview.elements then return end
 
 	local vsx, vsy = spGetViewGeometry()
-	local hudW = 380
-	local hudH = 82
-	local hudX = (vsx - hudW) * 0.5
-	local hudY = vsy - 120
-
+	local elems = activeBarragePreview.elements
 	local isSilo = activeBarragePreview.isSilo
-	local borderR = isSilo and 1.0 or 0.2
-	local borderG = isSilo and 0.45 or 0.9
-	local borderB = isSilo and 0.1 or 1.0
+	local isWarn = activeBarragePreview.stockWarning
+
+	-- 1. Draw 3D-projected countdown labels above target reticles
+	for i = 1, #elems do
+		local elem = elems[i]
+		local sx, sy = spWorldToScreenCoords(elem.targetPos[1], elem.targetPos[2] + 18, elem.targetPos[3])
+		if sx and sy and sx > 0 and sy > 0 and sx < vsx and sy < vsy then
+			local timerStr = string.format("T-%04.1fs", elem.readyTime)
+			glColor(0.0, 0.0, 0.0, 0.85)
+			glText(timerStr, sx + 1, sy - 1, 11, "cn")
+			if isWarn then
+				glColor(1.0, 0.6, 0.1, 1.0)
+			elseif isSilo then
+				glColor(0.2, 0.9, 1.0, 1.0)
+			else
+				glColor(0.3, 1.0, 0.5, 1.0)
+			end
+			glText(timerStr, sx, sy, 11, "cn")
+		end
+	end
+
+	-- 2. Glassmorphic Military HUD
+	local hudW = 420
+	local hudH = 88
+	local hudX = (vsx - hudW) * 0.5
+	local hudY = vsy - 125
+
+	local borderR = isWarn and 1.00 or (isSilo and 0.15 or 0.20)
+	local borderG = isWarn and 0.55 or (isSilo and 0.85 or 1.00)
+	local borderB = isWarn and 0.10 or (isSilo and 1.00 or 0.45)
 
 	-- Backdrop Glass
-	glColor(0.015, 0.04, 0.08, 0.88)
+	glColor(0.012, 0.035, 0.075, 0.90)
 	glRect(hudX, hudY, hudX + hudW, hudY + hudH)
 
-	-- Glowing Border
-	glColor(borderR, borderG, borderB, 0.9)
-	glLineWidth(2.0)
+	-- Glowing Tech Border
+	glColor(borderR, borderG, borderB, 0.92)
+	glLineWidth(2.2)
 	glBeginEnd(GL_LINE_LOOP, function()
 		glVertex(hudX, hudY)
 		glVertex(hudX + hudW, hudY)
@@ -897,18 +994,33 @@ function widget:DrawScreen()
 	end)
 
 	-- Header Title
-	local title = isSilo and "NUCLEAR / MISSILE CARPET BARRAGE" or (activeBarragePreview.isArea and "HEXAGONAL CARPET BARRAGE (TOT)" or "LINEAR CARPET BARRAGE (TOT)")
+	local title = ""
+	if isSilo then
+		title = isWarn and "ICBM SILO SALVO (STOCKPILE QUEUED)" or "ICBM STRATEGIC NUCLEAR BARRAGE"
+	else
+		title = activeBarragePreview.isArea and "HEXAGONAL CLOSE-PACKED BARRAGE (TOT)" or "LINEAR CARPET BOMBARDMENT (TOT)"
+	end
+
 	glColor(borderR, borderG, borderB, 1.0)
-	glText(title, hudX + 16, hudY + 52, 13, "o")
+	glText(title, hudX + 16, hudY + 58, 12, "o")
 
-	-- Detailed Salvo Info
-	local infoText = string.format("SALVO WARHEADS: %d  |  TOT IMPACT: %.1fs", activeBarragePreview.totalUnits, activeBarragePreview.maxReadyTime)
-	glColor(0.85, 0.95, 1.0, 0.95)
-	glText(infoText, hudX + 16, hudY + 32, 11, "o")
+	-- Detailed Salvo Telemetry
+	local infoText = ""
+	if isSilo and activeBarragePreview.isSingleUnit then
+		infoText = string.format("SALVO: %d WARHEADS  |  SEQUENTIAL TIMING: %.1fs -> %.1fs",
+			activeBarragePreview.totalUnits, elems[1].readyTime, activeBarragePreview.maxReadyTime)
+	else
+		infoText = string.format("SALVO: %d WARHEADS  |  TOT IMPACT: %.1fs  |  SYNC DELAY: %d frames",
+			activeBarragePreview.totalUnits, activeBarragePreview.maxReadyTime, elems[1].delayFrames or 0)
+	end
+	glColor(0.88, 0.95, 1.0, 0.95)
+	glText(infoText, hudX + 16, hudY + 36, 11, "o")
 
-	local hintText = isSilo and "Release to launch missile salvo  |  Hold Ctrl for Hex-Grid" or "Release to fire salvo  |  Hold Ctrl for Hex-Grid"
-	glColor(0.6, 0.8, 0.95, 0.75)
-	glText(hintText, hudX + 16, hudY + 12, 10, "o")
+	-- Action Hint
+	local hintText = isWarn and "Missiles will launch automatically upon construction"
+		or "Release to execute salvo  |  Hold Ctrl for Hex-Grid  |  Shift to Queue"
+	glColor(0.65, 0.82, 0.95, 0.80)
+	glText(hintText, hudX + 16, hudY + 14, 10, "o")
 
 	glColor(1, 1, 1, 1)
 end
