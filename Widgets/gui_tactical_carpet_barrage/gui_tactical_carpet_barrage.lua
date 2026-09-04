@@ -2,665 +2,468 @@ local widget = widget ---@type Widget
 
 function widget:GetInfo()
 	return {
-		name = "Tactical Carpet Barrage (TOT)",
-		desc = "Synchronized Time-on-Target (TOT) artillery saturation barrage with hexagonal non-overlapping spatial packing, 3D ballistic raycasting, and holographic visualization.",
-		author = "Codex",
-		date = "2026.09",
+		name = "Tactical Carpet Barrage & TOT",
+		desc = "Synchronized Time-On-Target (TOT) non-overlapping carpet bombardment for artillery, rockets, and missile silos.",
+		author = "reforged25-source / Codex",
+		date = "2026",
 		license = "GNU GPL, v2 or later",
-		layer = 260,
+		layer = 0,
 		enabled = true,
 		handler = true,
 	}
 end
 
 --------------------------------------------------------------------------------
--- Engine Constants & Math Localization
+-- SPRING API SPEEDUPS
 --------------------------------------------------------------------------------
-local sin, cos, atan2, sqrt, max, min, floor, ceil, abs, pi = math.sin, math.cos, math.atan2, math.sqrt, math.max, math.min, math.floor, math.ceil, math.abs, math.pi
-local TWO_PI = pi * 2
-local HALF_PI = pi * 0.5
-local DEG_TO_RAD = pi / 180.0
-local RAD_TO_DEG = 180.0 / pi
-local HEADING_TO_RAD = TWO_PI / 65536.0
+local spGetSelectedUnits       = Spring.GetSelectedUnits
+local spGetUnitDefID           = Spring.GetUnitDefID
+local spGetUnitPosition        = Spring.GetUnitPosition
+local spGetUnitHeading         = Spring.GetUnitHeading
+local spGetGroundHeight        = Spring.GetGroundHeight
+local spGetGroundNormal        = Spring.GetGroundNormal
+local spTraceScreenRay         = Spring.TraceScreenRay
+local spGetActiveCommand       = Spring.GetActiveCommand
+local spSetActiveCommand       = Spring.SetActiveCommand
+local spGiveOrderToUnit        = Spring.GiveOrderToUnit
+local spGetGameFrame           = Spring.GetGameFrame
+local spGetGameSeconds         = Spring.GetGameSeconds
+local spGetCameraPosition      = Spring.GetCameraPosition
+local spGetViewGeometry        = Spring.GetViewGeometry
+local spGetModKeyState         = Spring.GetModKeyState
+local spPlaySoundFile          = Spring.PlaySoundFile
+local spWorldToScreenCoords    = Spring.WorldToScreenCoords
 
-local spGetUnitPosition = Spring.GetUnitPosition
-local spGetUnitHeading = Spring.GetUnitHeading
-local spGetUnitDefID = Spring.GetUnitDefID
-local spGetSelectedUnits = Spring.GetSelectedUnits
-local spGetGroundHeight = Spring.GetGroundHeight
-local spTraceScreenRay = Spring.TraceScreenRay
-local spGetMouseState = Spring.GetMouseState
-local spGetModKeyState = Spring.GetModKeyState
-local spGetViewGeometry = Spring.GetViewGeometry
-local spGiveOrderToUnit = Spring.GiveOrderToUnit
-local spGetGameFrame = Spring.GetGameFrame
-local spPlaySoundFile = Spring.PlaySoundFile
-local spWorldToScreenCoords = Spring.WorldToScreenCoords
-local spGetActiveCommand = Spring.GetActiveCommand
+local glColor                  = gl.Color
+local glLineWidth              = gl.LineWidth
+local glBeginEnd               = gl.BeginEnd
+local glVertex                 = gl.Vertex
+local glPushMatrix             = gl.PushMatrix
+local glPopMatrix              = gl.PopMatrix
+local glTranslate              = gl.Translate
+local glRotate                 = gl.Rotate
+local glScale                  = gl.Scale
+local glDepthTest              = gl.DepthTest
+local glPolygonMode            = gl.PolygonMode
+local glText                   = gl.Text
+local glRect                   = gl.Rect
 
-local glColor = gl.Color
-local glLineWidth = gl.LineWidth
-local glBeginEnd = gl.BeginEnd
-local glVertex = gl.Vertex
-local glRect = gl.Rect
-local glTexture = gl.Texture
-local glTexRect = gl.TexRect
-local glText = gl.Text
-local glPushMatrix = gl.PushMatrix
-local glPopMatrix = gl.PopMatrix
-local glTranslate = gl.Translate
-local glBillboard = gl.Billboard
-local glDepthTest = gl.DepthTest
-local glPolygonMode = gl.PolygonMode
+local GL_LINES                 = GL.LINES
+local GL_LINE_STRIP            = GL.LINE_STRIP
+local GL_LINE_LOOP             = GL.LINE_LOOP
+local GL_TRIANGLE_FAN          = GL.TRIANGLE_FAN
 
-local GL_LINES = (GL and GL.LINES) or 0x0001
-local GL_LINE_STRIP = (GL and GL.LINE_STRIP) or 0x0003
-local GL_LINE_LOOP = (GL and GL.LINE_LOOP) or 0x0002
-local GL_TRIANGLES = (GL and GL.TRIANGLES) or 0x0004
-local GL_TRIANGLE_FAN = (GL and GL.TRIANGLE_FAN) or 0x0006
-local GL_FRONT_AND_BACK = (GL and GL.FRONT_AND_BACK) or 0x0408
-local GL_LINE = (GL and GL.LINE) or 0x1B01
-local GL_FILL = (GL and GL.FILL) or 0x1B02
-
-local CMD_ATTACK = CMD.ATTACK or 20
-local CMD_STOP = CMD.STOP or 0
-
---------------------------------------------------------------------------------
--- Config & State
---------------------------------------------------------------------------------
-local config = {
-	enabled = true,
-	hotkey = "b",
-	spreadMultiplier = 1.0, -- Default 1.0x (Adjustable via Mouse Wheel while dragging)
-	minSpreadMult = 0.5,
-	maxSpreadMult = 2.5,
-	soundVolume = 0.85,
-	showTrajectoryArcs = true,
-	showHoloHexGrid = true,
-	showCountdownTimer = true,
-	defaultGravity = 30.0,
-}
-
-local targetingModeActive = false
-local isDragging = false
-local dragStart = { x = 0, y = 0, z = 0 }
-local dragCurrent = { x = 0, y = 0, z = 0 }
-local cachedArtilleryUnits = {}
-local currentPlan = nil -- Active computed targeting plan
-local activeExecutions = {} -- List of currently running TOT strikes in-flight
-local animClock = 0
-local hudButtonRect = { x = 0, y = 0, w = 180, h = 38 }
+local max                      = math.max
+local min                      = math.min
+local sqrt                     = math.sqrt
+local abs                      = math.abs
+local sin                      = math.sin
+local cos                      = math.cos
+local atan2                    = math.atan2
+local floor                    = math.floor
+local pi                       = math.pi
+local TWO_PI                   = math.pi * 2
+local DEG_TO_RAD               = math.pi / 180
+local SPRING_HEADING_SCALE     = (2 * math.pi) / 65536
 
 --------------------------------------------------------------------------------
--- Precalculated Geometric Lattices (Zero GC Allocations)
+-- COMMAND CONSTANTS
 --------------------------------------------------------------------------------
-local HEX_CORNERS = {}
-do
-	for i = 0, 6 do
-		local angle = (i * 60) * DEG_TO_RAD
-		HEX_CORNERS[i] = { x = cos(angle), z = sin(angle) }
-	end
-end
+local CMD_ATTACK               = CMD.ATTACK or 16
+local CMD_SET_TARGET           = (CMD and CMD.SET_TARGET) or 34923
+local CMD_STOCKPILE            = (CMD and CMD.STOCKPILE) or 100
+local CMD_WAIT                 = CMD.WAIT or 25
+local CMD_FIRE_STATE           = CMD.FIRE_STATE or 45
 
-local CIRCLE_SEGMENTS = 24
-local CIRCLE_POINTS = {}
-do
-	for i = 0, CIRCLE_SEGMENTS do
-		local angle = (i / CIRCLE_SEGMENTS) * TWO_PI
-		CIRCLE_POINTS[i] = { x = cos(angle), z = sin(angle) }
-	end
-end
+local DRAG_DIST_THRESHOLD      = 45 -- World elmos before engaging carpet barrage
+local GRAVITY_CONSTANT         = 130.0 -- Spring engine standard gravity magnitude
 
 --------------------------------------------------------------------------------
--- Artillery Weapon Registry & Trajectory Metadata
+-- STATE VARIABLES
 --------------------------------------------------------------------------------
-local ARTILLERY_CACHE = {}
+local isDragging               = false
+local dragStartWorld           = nil
+local dragCurrentWorld         = nil
+local dragCommandID            = CMD_ATTACK
+local isAreaMode               = false
+local isAltRightDrag           = false
 
-local function getArtilleryProfile(unitDefID)
-	if ARTILLERY_CACHE[unitDefID] ~= nil then
-		return ARTILLERY_CACHE[unitDefID]
+local activeBarragePreview     = nil
+local pendingSalvos            = {} -- Queue of scheduled TOT fire events
+local unitWeaponCache          = {}
+
+--------------------------------------------------------------------------------
+-- WEAPON & BALLISTICS ENGINE
+--------------------------------------------------------------------------------
+local function GetUnitWeaponInfo(unitDefID)
+	if unitWeaponCache[unitDefID] ~= nil then
+		return unitWeaponCache[unitDefID]
 	end
 
-	local ud = UnitDefs[unitDefID]
-	if not ud or not ud.weapons or #ud.weapons == 0 then
-		ARTILLERY_CACHE[unitDefID] = false
+	local udef = UnitDefs[unitDefID]
+	if not udef or not udef.weapons or #udef.weapons == 0 then
+		unitWeaponCache[unitDefID] = false
 		return false
 	end
 
+	-- Scan weapons to find the primary long-range ballistic / rocket / plasma weapon
 	local bestWeapon = nil
 	local maxRange = 0
 
-	for i = 1, #ud.weapons do
-		local w = ud.weapons[i]
-		local wdef = w and w.weaponDef and WeaponDefs[w.weaponDef]
-		if wdef then
-			local wtype = wdef.type or ""
-			local range = wdef.range or 0
-			-- Artillery weapons: Cannon, MissileLauncher, Plasma, Mortar with range >= 650
-			local isArtilleryType = (wtype == "Cannon" or wtype == "MissileLauncher" or wtype == "Plasma" or wtype == "Mortar")
-			if (isArtilleryType or range >= 800) and range >= 600 then
-				if range > maxRange then
-					maxRange = range
+	for i = 1, #udef.weapons do
+		local w = udef.weapons[i]
+		if w and w.weaponDef then
+			local wdef = WeaponDefs[w.weaponDef]
+			if wdef and wdef.range and wdef.range > maxRange then
+				-- Filter out AA-only or shield-only weapons
+				local isAA = wdef.onlyTargets and wdef.onlyTargets.air
+				if not isAA and wdef.range >= 350 then
+					maxRange = wdef.range
 					bestWeapon = wdef
 				end
 			end
 		end
 	end
 
-	if bestWeapon then
-		local profile = {
-			name = ud.humanName or ud.name,
-			range = bestWeapon.range or 1000,
-			minRange = bestWeapon.minRange or 0,
-			velocity = bestWeapon.projectilespeed or bestWeapon.weaponVelocity or 450,
-			aoe = max(32.0, bestWeapon.damageAreaOfEffect or 64.0),
-			accuracy = bestWeapon.accuracy or 0,
-			highTrajectory = (bestWeapon.highTrajectory == 1 or bestWeapon.highTrajectory == 2),
-			turnRate = max(0.2, (bestWeapon.turnRate or (ud.turnRate and ud.turnRate * 0.05) or 1.0)),
-			reload = bestWeapon.reload or 3.0,
-		}
-		ARTILLERY_CACHE[unitDefID] = profile
-		return profile
+	if not bestWeapon then
+		unitWeaponCache[unitDefID] = false
+		return false
 	end
 
-	ARTILLERY_CACHE[unitDefID] = false
-	return false
+	local info = {
+		name         = bestWeapon.name or "Artillery",
+		range        = bestWeapon.range or 800,
+		minRange     = bestWeapon.minRange or 0,
+		aoe          = max(32, bestWeapon.damageAreaOfEffect or 48),
+		projSpeed    = max(100, bestWeapon.projectilespeed or 350),
+		isBallistic  = (bestWeapon.type == "Cannon" or bestWeapon.type == "MissileLauncher"),
+		highTraj     = bestWeapon.trajectoryHeight and (bestWeapon.trajectoryHeight > 0),
+		turnRate     = max(0.2, (udef.turnRate or 300) * DEG_TO_RAD),
+		accuracy     = bestWeapon.accuracy or 0,
+	}
+
+	unitWeaponCache[unitDefID] = info
+	return info
 end
 
-local function getSelectedArtillery()
-	local sel = spGetSelectedUnits()
-	if not sel or #sel == 0 then return {} end
-	local arties = {}
-	for i = 1, #sel do
-		local uid = sel[i]
-		local defID = spGetUnitDefID(uid)
-		if defID and getArtilleryProfile(defID) then
-			arties[#arties + 1] = uid
-		end
+--- Solves the exact ballistic time of flight under Spring engine gravity
+local function SolveFlightTime(dx, dy, dz, projSpeed, isBallistic, highTraj)
+	local horizDist = sqrt(dx * dx + dz * dz)
+	if horizDist <= 1 then return 0.1 end
+
+	if not isBallistic then
+		local totalDist = sqrt(horizDist * horizDist + dy * dy)
+		return max(0.1, totalDist / projSpeed)
 	end
-	return arties
-end
 
---------------------------------------------------------------------------------
--- Mathematical Ballistics Solver (Exact 3D Parabola under Gravity)
---------------------------------------------------------------------------------
-local function solveBallistics(gx, gy, gz, tx, ty, tz, velocity, allowHigh)
-	local dx = tx - gx
-	local dz = tz - gz
-	local dy = ty - gy
-	local d2D = sqrt(dx * dx + dz * dz)
-
-	if d2D <= 0.001 then return nil end
-
-	local g = (Game and Game.gravity) or config.defaultGravity
-	local v = velocity
+	local g = GRAVITY_CONSTANT
+	local v = projSpeed
 	local v2 = v * v
 	local v4 = v2 * v2
-	local gDist = g * d2D
-	local gDist2 = gDist * gDist
 
-	-- Ballistic discriminant: v^4 - g * (g * d2D^2 + 2 * dy * v^2)
-	local disc = v4 - g * (g * d2D * d2D + 2.0 * dy * v2)
-	if disc < 0 then
-		return nil -- Target out of physical ballistic range
+	local discriminant = v4 - g * (g * horizDist * horizDist + 2 * dy * v2)
+
+	if discriminant < 0 then
+		-- Target out of pure ballistic range, fallback to direct velocity
+		local totalDist = sqrt(horizDist * horizDist + dy * dy)
+		return max(0.1, totalDist / v)
 	end
 
-	local sqrtDisc = sqrt(disc)
-	local angleLow = atan2(v2 - sqrtDisc, gDist)
-	local angleHigh = atan2(v2 + sqrtDisc, gDist)
+	local sqrtDisc = sqrt(discriminant)
+	local root = highTraj and (v2 + sqrtDisc) or (v2 - sqrtDisc)
+	local tanTheta = root / (g * horizDist)
+	local theta = atan2(root, g * horizDist)
+	local cosTheta = cos(theta)
 
-	-- Choose trajectory angle based on weapon capability
-	local angle = angleLow
-	if allowHigh and angleHigh > 0 and angleHigh < HALF_PI then
-		angle = angleHigh
-	end
+	local vHoriz = max(10, v * cosTheta)
+	local flightTime = horizDist / vHoriz
+	return max(0.1, flightTime)
+end
 
-	local vHoriz = v * cos(angle)
-	if vHoriz <= 0.001 then return nil end
+--- Solves turret slew/traverse time to align with target heading
+local function SolveTurretSlewTime(unitX, unitZ, unitHeadingSpring, targetX, targetZ, turnRate)
+	local desiredAngle = atan2(targetX - unitX, targetZ - unitZ)
+	local currentAngle = unitHeadingSpring * SPRING_HEADING_SCALE
 
-	local flightTime = d2D / vHoriz
+	local diff = desiredAngle - currentAngle
+	while diff > pi do diff = diff - TWO_PI end
+	while diff < -pi do diff = diff + TWO_PI end
 
-	return {
-		angle = angle,
-		flightTime = flightTime,
-		distance = d2D,
-		vHoriz = vHoriz,
-		vVert = v * sin(angle),
-		gravity = g,
-		dirX = dx / d2D,
-		dirZ = dz / d2D,
-	}
+	local absDiff = abs(diff)
+	return absDiff / max(0.1, turnRate)
 end
 
 --------------------------------------------------------------------------------
--- 3D Terrain Collision & Obstacle Clearance Raycaster
+-- SPATIAL TESSELLATION & PACKING (HEXAGONAL & LINEAR)
 --------------------------------------------------------------------------------
-local function checkTrajectoryClearance(gx, gy, gz, tx, ty, tz, sol)
-	if not sol then return false end
-
-	local SAMPLES = 16
-	local dt = sol.flightTime / SAMPLES
-	local t = 0
-
-	for i = 1, SAMPLES - 1 do
-		t = t + dt
-		local x = gx + sol.dirX * (sol.vHoriz * t)
-		local z = gz + sol.dirZ * (sol.vHoriz * t)
-		local y = gy + (sol.vVert * t) - 0.5 * sol.gravity * (t * t)
-
-		local groundY = spGetGroundHeight(x, z) or 0
-		if y < groundY + 12.0 then
-			return false -- Shell collides with mountain / obstacle
-		end
-	end
-
-	return true
-end
-
---------------------------------------------------------------------------------
--- Hexagonal Circle Packing & Area Saturation Lattice Generator
---------------------------------------------------------------------------------
-local function generateHexLattice(cx, cz, fx, fz, count, baseAOE, spreadMult)
+local function GenerateLinearTessellation(pStart, pEnd, count, avgAoE)
 	local points = {}
 	if count <= 0 then return points end
 
-	if count == 1 then
-		local gy = spGetGroundHeight(cx, cz) or 0
-		points[1] = { x = cx, y = gy, z = cz, ring = 0 }
+	local dx = pEnd[1] - pStart[1]
+	local dz = pEnd[3] - pStart[3]
+	local totalDist = sqrt(dx * dx + dz * dz)
+
+	if count == 1 or totalDist < 1 then
+		local gy = spGetGroundHeight(pStart[1], pStart[3])
+		points[1] = { pStart[1], gy, pStart[3] }
 		return points
 	end
 
-	-- Perpendicular right vector: (-fz, fx)
-	local rx, rz = -fz, fx
+	local stepFrac = 1.0 / (count - 1)
+	for i = 0, count - 1 do
+		local frac = i * stepFrac
+		local tx = pStart[1] + dx * frac
+		local tz = pStart[3] + dz * frac
+		local ty = spGetGroundHeight(tx, tz)
+		points[#points + 1] = { tx, ty, tz }
+	end
 
-	-- Hexagonal cell spacing (90% of blast diameter for optimal lethality overlap)
-	local spacing = max(45.0, baseAOE * 1.80 * spreadMult)
-	local rowH = spacing * 0.866025 -- sqrt(3)/2
+	return points
+end
 
-	local cols = ceil(sqrt(count * 1.25))
-	local rows = ceil(count / cols)
-	local halfCols = (cols - 1) * 0.5
-	local halfRows = (rows - 1) * 0.5
+local function GenerateHexagonalTessellation(center, radius, count, avgAoE)
+	local points = {}
+	if count <= 0 then return points end
 
-	local idx = 1
-	for r = 0, rows - 1 do
-		local rowOffset = (r % 2 == 1) and (spacing * 0.5) or 0
-		for c = 0, cols - 1 do
-			if idx <= count then
-				local px = cx + rx * ((c - halfCols) * spacing + rowOffset) + fx * ((r - halfRows) * rowH)
-				local pz = cz + rz * ((c - halfCols) * spacing + rowOffset) + fz * ((r - halfRows) * rowH)
-				local py = spGetGroundHeight(px, pz) or 0
+	local gy = spGetGroundHeight(center[1], center[3])
+	points[1] = { center[1], gy, center[3] }
+	if count == 1 then return points end
 
-				points[idx] = {
-					x = px,
-					y = py,
-					z = pz,
-					col = c,
-					row = r,
-				}
-				idx = idx + 1
-			end
+	local spacing = max(avgAoE * 1.5, 45)
+	local ring = 1
+
+	while #points < count do
+		local ringRadius = ring * spacing
+		local numInRing = ring * 6
+		local angleStep = TWO_PI / numInRing
+
+		for i = 0, numInRing - 1 do
+			if #points >= count then break end
+			local a = i * angleStep
+			local tx = center[1] + cos(a) * ringRadius
+			local tz = center[3] + sin(a) * ringRadius
+			local ty = spGetGroundHeight(tx, tz)
+			points[#points + 1] = { tx, ty, tz }
 		end
+		ring = ring + 1
+		if ring > 10 then break end -- Safety cap
 	end
 
 	return points
 end
 
 --------------------------------------------------------------------------------
--- Spatial Bipartite Assignment Solver (Greedy Min-Cost & Non-Crossing)
+-- TOPOLOGICAL ZERO-CRISSCROSS MATCHING
 --------------------------------------------------------------------------------
-local function solveAssignments(units, targets)
-	local pairsResult = {}
+local function MatchUnitsToTargetsZeroCrisscross(units, targets, dirVector)
 	local count = min(#units, #targets)
-	if count == 0 then return pairsResult end
+	if count <= 0 then return {} end
 
-	local unitData = {}
+	local uDirX = dirVector[1]
+	local uDirZ = dirVector[2]
+
+	-- 1. Decorate units with scalar projections
+	local decoratedUnits = {}
 	for i = 1, #units do
-		local uid = units[i]
-		local ux, uy, uz = spGetUnitPosition(uid)
-		local head = spGetUnitHeading(uid) or 0
-		local headRad = head * HEADING_TO_RAD
-		local defID = spGetUnitDefID(uid)
-		local profile = getArtilleryProfile(defID)
-		unitData[i] = {
-			uid = uid,
-			x = ux or 0,
-			y = uy or 0,
-			z = uz or 0,
-			heading = headRad,
-			profile = profile,
-			assigned = false,
+		local u = units[i]
+		local proj = (u.pos[1] * uDirX) + (u.pos[3] * uDirZ)
+		decoratedUnits[i] = { unit = u, proj = proj }
+	end
+
+	-- 2. Decorate targets with scalar projections along same axis
+	local decoratedTargets = {}
+	for j = 1, #targets do
+		local t = targets[j]
+		local proj = (t[1] * uDirX) + (t[3] * uDirZ)
+		decoratedTargets[j] = { target = t, proj = proj }
+	end
+
+	-- 3. Sort both sets strictly along the projection axis
+	table.sort(decoratedUnits, function(a, b) return a.proj < b.proj end)
+	table.sort(decoratedTargets, function(a, b) return a.proj < b.proj end)
+
+	-- 4. Pair 1-to-1: strictly parallel lines of fire with zero crisscrossing
+	local pairings = {}
+	for k = 1, count do
+		pairings[k] = {
+			unit   = decoratedUnits[k].unit,
+			target = decoratedTargets[k].target,
 		}
 	end
 
-	local targetUsed = {}
-	for j = 1, #targets do targetUsed[j] = false end
-
-	-- Greedy bipartite cost matching
-	for k = 1, count do
-		local bestCost = 1e9
-		local bestU = nil
-		local bestT = nil
-		local bestSol = nil
-
-		for i = 1, #unitData do
-			if not unitData[i].assigned then
-				local u = unitData[i]
-				local prof = u.profile
-				for j = 1, #targets do
-					if not targetUsed[j] then
-						local t = targets[j]
-						local sol = solveBallistics(u.x, u.y, u.z, t.x, t.y, t.z, prof.velocity, prof.highTrajectory)
-						if sol and sol.distance <= prof.range and sol.distance >= prof.minRange then
-							local targetAngle = atan2(t.x - u.x, t.z - u.z)
-							local dYaw = abs(targetAngle - u.heading)
-							if dYaw > pi then dYaw = TWO_PI - dYaw end
-
-							local aimTime = dYaw / prof.turnRate
-							local cost = aimTime * 2.0 + sol.flightTime * 0.5
-
-							-- Check terrain clearance bonus/penalty
-							local clear = checkTrajectoryClearance(u.x, u.y, u.z, t.x, t.y, t.z, sol)
-							if not clear then
-								cost = cost + 100.0 -- Severe obstacle penalty
-							end
-
-							if cost < bestCost then
-								bestCost = cost
-								bestU = i
-								bestT = j
-								bestSol = sol
-							end
-						end
-					end
-				end
-			end
-		end
-
-		if bestU and bestT then
-			unitData[bestU].assigned = true
-			targetUsed[bestT] = true
-			local u = unitData[bestU]
-			local t = targets[bestT]
-			local clear = checkTrajectoryClearance(u.x, u.y, u.z, t.x, t.y, t.z, bestSol)
-
-			pairsResult[#pairsResult + 1] = {
-				unitID = u.uid,
-				gunX = u.x,
-				gunY = u.y,
-				gunZ = u.z,
-				targetX = t.x,
-				targetY = t.y,
-				targetZ = t.z,
-				flightTime = bestSol.flightTime,
-				aimTime = abs(atan2(t.x - u.x, t.z - u.z) - u.heading) / u.profile.turnRate,
-				clear = clear,
-				solution = bestSol,
-				aoe = u.profile.aoe,
-			}
-		else
-			break
-		end
-	end
-
-	return pairsResult
+	return pairings
 end
 
 --------------------------------------------------------------------------------
--- Plan Synthesizer (Time-on-Target Synchronization)
+-- CARPET BARRAGE SOLVER (BUILD FULL SALVO BLUEPRINT)
 --------------------------------------------------------------------------------
-local function computeBarragePlan(units, startPos, curPos)
-	if #units == 0 then return nil end
+local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
+	local rawSelected = spGetSelectedUnits()
+	if not rawSelected or #rawSelected < 2 then return nil end
 
-	local fdx = curPos.x - startPos.x
-	local fdz = curPos.z - startPos.z
-	local dist = sqrt(fdx * fdx + fdz * fdz)
-	local fx, fz = 0, -1
-	if dist > 10.0 then
-		fx = fdx / dist
-		fz = fdz / dist
-	end
+	-- 1. Filter valid artillery/combat units
+	local validUnits = {}
+	local totalAoE = 0
 
-	-- Compute average AOE of selected artillery
-	local totalAOE = 0
-	for i = 1, #units do
-		local defID = spGetUnitDefID(units[i])
-		local prof = getArtilleryProfile(defID)
-		totalAOE = totalAOE + (prof and prof.aoe or 64.0)
-	end
-	local avgAOE = totalAOE / max(1, #units)
-
-	local hexTargets = generateHexLattice(startPos.x, startPos.z, fx, fz, #units, avgAOE, config.spreadMultiplier)
-	local pairsList = solveAssignments(units, hexTargets)
-
-	if #pairsList == 0 then return nil end
-
-	-- Find maximum preparation time (longest flight + aim time)
-	local maxPrepTime = 0
-	for i = 1, #pairsList do
-		local prep = pairsList[i].flightTime + pairsList[i].aimTime
-		if prep > maxPrepTime then
-			maxPrepTime = prep
+	for i = 1, #rawSelected do
+		local uid = rawSelected[i]
+		local udefID = spGetUnitDefID(uid)
+		if udefID then
+			local winfo = GetUnitWeaponInfo(udefID)
+			if winfo then
+				local ux, uy, uz = spGetUnitPosition(uid)
+				local uheading = spGetUnitHeading(uid) or 0
+				validUnits[#validUnits + 1] = {
+					id       = uid,
+					pos      = { ux, uy, uz },
+					heading  = uheading,
+					winfo    = winfo,
+				}
+				totalAoE = totalAoE + winfo.aoe
+			end
 		end
 	end
 
-	local totImpactDelay = maxPrepTime + 0.30 -- Network / order buffer (0.30s)
+	local numUnits = #validUnits
+	if numUnits < 2 then return nil end
+	local avgAoE = totalAoE / numUnits
 
-	-- Calculate staggered fire time for each unit
-	for i = 1, #pairsList do
-		local p = pairsList[i]
-		p.fireDelay = max(0, totImpactDelay - p.flightTime)
+	-- 2. Generate Tessellated Target Points
+	local targets = {}
+	local dirX, dirZ
+
+	if isArea then
+		local dx = pEnd[1] - pStart[1]
+		local dz = pEnd[3] - pStart[3]
+		local rad = max(avgAoE * 1.5, sqrt(dx * dx + dz * dz))
+		targets = GenerateHexagonalTessellation(pStart, rad, numUnits, avgAoE)
+		dirX = dx
+		dirZ = dz
+	else
+		targets = GenerateLinearTessellation(pStart, pEnd, numUnits, avgAoE)
+		dirX = pEnd[1] - pStart[1]
+		dirZ = pEnd[3] - pStart[3]
+	end
+
+	local dirLen = sqrt(dirX * dirX + dirZ * dirZ)
+	if dirLen < 0.001 then
+		dirX, dirZ = 1, 0
+	else
+		dirX, dirZ = dirX / dirLen, dirZ / dirLen
+	end
+
+	-- 3. Match Units to Targets (Zero-Crisscross)
+	local pairings = MatchUnitsToTargetsZeroCrisscross(validUnits, targets, { dirX, dirZ })
+	if #pairings == 0 then return nil end
+
+	-- 4. Calculate Ballistics & TOT Timings
+	local maxReadyTime = 0
+	local salvoElements = {}
+
+	for k = 1, #pairings do
+		local p = pairings[k]
+		local u = p.unit
+		local t = p.target
+
+		local dx = t[1] - u.pos[1]
+		local dy = t[2] - u.pos[2]
+		local dz = t[3] - u.pos[3]
+
+		local flightTime = SolveFlightTime(dx, dy, dz, u.winfo.projSpeed, u.winfo.isBallistic, u.winfo.highTraj)
+		local slewTime = SolveTurretSlewTime(u.pos[1], u.pos[3], u.heading, t[1], t[3], u.winfo.turnRate)
+		local readyTime = slewTime + flightTime
+
+		if readyTime > maxReadyTime then
+			maxReadyTime = readyTime
+		end
+
+		salvoElements[k] = {
+			unitID     = u.id,
+			unitPos    = u.pos,
+			targetPos  = t,
+			aoe        = u.winfo.aoe,
+			flightTime = flightTime,
+			slewTime   = slewTime,
+			readyTime  = readyTime,
+		}
+	end
+
+	-- 5. Calculate Exact Frame Delays for Simultaneous Detonation
+	local currentFrame = spGetGameFrame()
+	for k = 1, #salvoElements do
+		local elem = salvoElements[k]
+		local fireDelaySec = maxReadyTime - elem.readyTime
+		elem.delayFrames = max(0, floor(fireDelaySec * 30))
+		elem.fireFrame   = currentFrame + elem.delayFrames
 	end
 
 	return {
-		pairs = pairsList,
-		totDelay = totImpactDelay,
-		centroid = { x = startPos.x, y = startPos.y, z = startPos.z },
-		avgAOE = avgAOE,
-		unitCount = #pairsList,
+		commandID      = cmdID,
+		elements       = salvoElements,
+		maxReadyTime   = maxReadyTime,
+		totalUnits     = #salvoElements,
+		pStart         = pStart,
+		pEnd           = pEnd,
+		isArea         = isArea,
+		createdFrame   = currentFrame,
 	}
 end
 
 --------------------------------------------------------------------------------
--- Execution & Dispatcher (Precision Frame Synchronization)
+-- DISPATCHER & TOT QUEUE HANDLER
 --------------------------------------------------------------------------------
-local function executeBarrage(plan)
-	if not plan or #plan.pairs == 0 then return end
+local function ExecuteCarpetBarrage(plan)
+	if not plan or not plan.elements then return end
 
-	local curFrame = spGetGameFrame() or 0
-	local impactFrame = curFrame + ceil(plan.totDelay * 30.0)
+	local currentFrame = spGetGameFrame()
+	local pending = {}
 
-	local exec = {
-		impactFrame = impactFrame,
-		startFrame = curFrame,
-		totDelay = plan.totDelay,
-		centroid = plan.centroid,
-		pairs = plan.pairs,
-		completed = false,
-	}
-
-	for i = 1, #plan.pairs do
-		local p = plan.pairs[i]
-		p.scheduledFireFrame = curFrame + ceil(p.fireDelay * 30.0)
-		p.fired = false
-	end
-
-	activeExecutions[#activeExecutions + 1] = exec
-
-	if config.soundVolume > 0 then
-		spPlaySoundFile("beep4", config.soundVolume, "ui")
-	end
-end
-
---------------------------------------------------------------------------------
--- Input Handling (Hotkeys & Mouse Interception)
---------------------------------------------------------------------------------
-local function getGroundPos(mx, my)
-	local _, pos = spTraceScreenRay(mx, my, true, false, false)
-	if pos then
-		return pos[1], pos[2], pos[3]
-	end
-	return nil, nil, nil
-end
-
-function widget:KeyPress(key, mods, isRepeat)
-	if isRepeat then return false end
-
-	-- Toggle Barrage mode via 'B' key when artillery units are selected
-	if key == 98 or key == 66 then -- 'b' / 'B'
-		local arties = getSelectedArtillery()
-		if #arties > 0 then
-			targetingModeActive = not targetingModeActive
-			isDragging = false
-			currentPlan = nil
-			if config.soundVolume > 0 then
-				spPlaySoundFile("beep4", targetingModeActive and 0.90 or 0.40, "ui")
-			end
-			return true
+	for i = 1, #plan.elements do
+		local elem = plan.elements[i]
+		if elem.fireFrame <= currentFrame then
+			-- Fire immediately on this frame
+			spGiveOrderToUnit(elem.unitID, plan.commandID, elem.targetPos, {})
+		else
+			-- Queue for sub-tick synchronized release
+			pending[#pending + 1] = {
+				unitID    = elem.unitID,
+				cmdID     = plan.commandID,
+				targetPos = elem.targetPos,
+				fireFrame = elem.fireFrame,
+			}
 		end
 	end
 
-	-- Escape key cancels mode
-	if key == 27 then -- Escape
-		if targetingModeActive or isDragging then
-			targetingModeActive = false
-			isDragging = false
-			currentPlan = nil
-			return true
-		end
+	if #pending > 0 then
+		pendingSalvos[#pendingSalvos + 1] = pending
 	end
 
-	return false
+	spPlaySoundFile("sounds/ui/build_done.wav", 1.0, nil, nil, nil, "ui")
 end
 
-function widget:MousePress(mx, my, button)
-	local arties = getSelectedArtillery()
-	if #arties == 0 then
-		targetingModeActive = false
-		return false
-	end
-
-	local _, _, meta, shift = spGetModKeyState()
-	local isAlt = meta or false
-
-	-- Left-Click (button 1) while in targeting mode: Start dragging saturation zone
-	if button == 1 and targetingModeActive then
-		local gx, gy, gz = getGroundPos(mx, my)
-		if gx then
-			isDragging = true
-			dragStart.x = gx
-			dragStart.y = gy
-			dragStart.z = gz
-			dragCurrent.x = gx
-			dragCurrent.y = gy
-			dragCurrent.z = gz
-			cachedArtilleryUnits = arties
-			currentPlan = computeBarragePlan(arties, dragStart, dragCurrent)
-			return true
-		end
-	end
-
-	-- Power-user Alt + Right-Click (button 3): Instant Drag Barrage without pressing 'B'
-	if button == 3 and isAlt and #arties > 0 then
-		local gx, gy, gz = getGroundPos(mx, my)
-		if gx then
-			targetingModeActive = true
-			isDragging = true
-			dragStart.x = gx
-			dragStart.y = gy
-			dragStart.z = gz
-			dragCurrent.x = gx
-			dragCurrent.y = gy
-			dragCurrent.z = gz
-			cachedArtilleryUnits = arties
-			currentPlan = computeBarragePlan(arties, dragStart, dragCurrent)
-			return true
-		end
-	end
-
-	-- Right click cancels active targeting mode
-	if button == 3 and targetingModeActive then
-		targetingModeActive = false
-		isDragging = false
-		currentPlan = nil
-		return true
-	end
-
-	return false
-end
-
-function widget:MouseMove(mx, my, dx, dy, button)
-	if not isDragging then return false end
-
-	local gx, gy, gz = getGroundPos(mx, my)
-	if gx then
-		dragCurrent.x = gx
-		dragCurrent.y = gy
-		dragCurrent.z = gz
-		currentPlan = computeBarragePlan(cachedArtilleryUnits, dragStart, dragCurrent)
-	end
-	return true
-end
-
-function widget:MouseRelease(mx, my, button)
-	if isDragging and button == 1 then
-		isDragging = false
-		targetingModeActive = false
-		if currentPlan and #currentPlan.pairs > 0 then
-			executeBarrage(currentPlan)
-		end
-		currentPlan = nil
-		return true
-	end
-	return false
-end
-
-function widget:MouseWheel(up, value)
-	if isDragging then
-		local delta = up and 0.15 or -0.15
-		config.spreadMultiplier = max(config.minSpreadMult, min(config.maxSpreadMult, config.spreadMultiplier + delta))
-		if dragStart.x then
-			currentPlan = computeBarragePlan(cachedArtilleryUnits, dragStart, dragCurrent)
-		end
-		return true
-	end
-	return false
-end
-
---------------------------------------------------------------------------------
--- GameFrame Update & High-Precision Staggered Firing Execution
---------------------------------------------------------------------------------
 function widget:GameFrame(frame)
-	animClock = animClock + 0.033
+	if #pendingSalvos == 0 then return end
 
-	-- Process active TOT executions
 	local i = 1
-	while i <= #activeExecutions do
-		local exec = activeExecutions[i]
-		local allDone = true
+	while i <= #pendingSalvos do
+		local salvo = pendingSalvos[i]
+		local allDispatched = true
 
-		for j = 1, #exec.pairs do
-			local p = exec.pairs[j]
-			if not p.fired then
-				if frame >= p.scheduledFireFrame then
-					-- Issue the Attack Ground command to the specific artillery piece
-					spGiveOrderToUnit(p.unitID, CMD_ATTACK, { p.targetX, p.targetY, p.targetZ }, {})
-					p.fired = true
-					if config.soundVolume > 0 then
-						spPlaySoundFile("beep4", 0.45, "ui")
-					end
+		for k = 1, #salvo do
+			local item = salvo[k]
+			if item and not item.dispatched then
+				if frame >= item.fireFrame then
+					spGiveOrderToUnit(item.unitID, item.cmdID, item.targetPos, {})
+					item.dispatched = true
 				else
-					allDone = false
+					allDispatched = false
 				end
 			end
 		end
 
-		if frame >= exec.impactFrame then
-			-- Synchronized Impact Confirmation
-			if config.soundVolume > 0 then
-				spPlaySoundFile("beep4", 0.95, "ui")
-			end
-			table.remove(activeExecutions, i)
+		if allDispatched then
+			table.remove(pendingSalvos, i)
 		else
 			i = i + 1
 		end
@@ -668,200 +471,254 @@ function widget:GameFrame(frame)
 end
 
 --------------------------------------------------------------------------------
--- Holographic 3D World Rendering (Zero-GC Batched Shaders & Displays)
+-- RAYCAST GROUND HELPER
 --------------------------------------------------------------------------------
-local function drawHexagonGround(cx, cy, cz, radius)
-	glBeginEnd(GL_LINE_LOOP, function()
-		for i = 0, 5 do
-			local p = HEX_CORNERS[i]
-			local hx = cx + p.x * radius
-			local hz = cz + p.z * radius
-			local hy = spGetGroundHeight(hx, hz) or cy
-			glVertex(hx, hy + 2.0, hz)
-		end
-	end)
-end
-
-local function drawCircleGround(cx, cy, cz, radius)
-	glBeginEnd(GL_LINE_LOOP, function()
-		for i = 0, CIRCLE_SEGMENTS do
-			local p = CIRCLE_POINTS[i]
-			local hx = cx + p.x * radius
-			local hz = cz + p.z * radius
-			local hy = spGetGroundHeight(hx, hz) or cy
-			glVertex(hx, hy + 2.0, hz)
-		end
-	end)
-end
-
-local function drawParabolicArc(gx, gy, gz, tx, ty, tz, sol, color, progress)
-	local SAMPLES = 24
-	local dt = sol.flightTime / SAMPLES
-	local t = 0
-
-	glLineWidth(2.0)
-	glBeginEnd(GL_LINE_STRIP, function()
-		for i = 0, SAMPLES do
-			local curT = i * dt
-			local x = gx + sol.dirX * (sol.vHoriz * curT)
-			local z = gz + sol.dirZ * (sol.vHoriz * curT)
-			local y = gy + (sol.vVert * curT) - 0.5 * sol.gravity * (curT * curT)
-			local alpha = (1.0 - (i / SAMPLES) * 0.40) * color[4]
-			glColor(color[1], color[2], color[3], alpha)
-			glVertex(x, y, z)
-		end
-	end)
-
-	-- Draw moving energy tracer bead along arc
-	if progress and progress >= 0 and progress <= 1.0 then
-		local beadT = progress * sol.flightTime
-		local bx = gx + sol.dirX * (sol.vHoriz * beadT)
-		local bz = gz + sol.dirZ * (sol.vHoriz * beadT)
-		local by = gy + (sol.vVert * beadT) - 0.5 * sol.gravity * (beadT * beadT)
-		glColor(1.0, 1.0, 0.40, 0.90)
-		drawCircleGround(bx, by, bz, 14.0)
+local function ScreenToGround(mx, my)
+	local _, pos = spTraceScreenRay(mx, my, true, true)
+	if pos then
+		return pos
 	end
+	return nil
+end
+
+--------------------------------------------------------------------------------
+-- MOUSE & COMMAND HOOKS ("กดที่ปุ่มเดิมเลย")
+--------------------------------------------------------------------------------
+function widget:MousePress(mx, my, button)
+	local alt, ctrl, meta, shift = spGetModKeyState()
+
+	-- Alt + Right-Click Drag shortcut
+	if button == 3 and alt then
+		local gpos = ScreenToGround(mx, my)
+		if gpos then
+			isDragging = true
+			isAltRightDrag = true
+			dragCommandID = CMD_ATTACK
+			dragStartWorld = gpos
+			dragCurrentWorld = gpos
+			isAreaMode = ctrl
+			activeBarragePreview = nil
+			return true
+		end
+	end
+
+	-- Intercepting Active In-Game Command (Attack, Set Target, Launch)
+	if button == 1 then
+		local _, activeCmdID = spGetActiveCommand()
+		if activeCmdID == CMD_ATTACK or activeCmdID == CMD_SET_TARGET or activeCmdID == CMD_STOCKPILE then
+			local sel = spGetSelectedUnits()
+			if sel and #sel >= 2 then
+				local gpos = ScreenToGround(mx, my)
+				if gpos then
+					isDragging = true
+					isAltRightDrag = false
+					dragCommandID = activeCmdID
+					dragStartWorld = gpos
+					dragCurrentWorld = gpos
+					isAreaMode = ctrl
+					activeBarragePreview = nil
+					-- Don't consume yet; allow short click to fallback naturally
+				end
+			end
+		end
+	end
+
+	return false
+end
+
+function widget:MouseMove(mx, my, dx, dy, button)
+	if not isDragging or not dragStartWorld then return false end
+
+	local gpos = ScreenToGround(mx, my)
+	if gpos then
+		dragCurrentWorld = gpos
+		local _, ctrl = spGetModKeyState()
+		isAreaMode = ctrl
+
+		local dX = dragCurrentWorld[1] - dragStartWorld[1]
+		local dZ = dragCurrentWorld[3] - dragStartWorld[3]
+		local dist = sqrt(dX * dX + dZ * dZ)
+
+		if dist >= DRAG_DIST_THRESHOLD then
+			activeBarragePreview = BuildCarpetBarragePlan(dragCommandID, dragStartWorld, dragCurrentWorld, isAreaMode)
+		else
+			activeBarragePreview = nil
+		end
+	end
+
+	return false
+end
+
+function widget:MouseRelease(mx, my, button)
+	if not isDragging then return false end
+
+	local handled = false
+	if activeBarragePreview and activeBarragePreview.totalUnits >= 2 then
+		ExecuteCarpetBarrage(activeBarragePreview)
+		-- Consume active command so standard single attack doesn't duplicate
+		spSetActiveCommand(0)
+		handled = true
+	end
+
+	isDragging = false
+	dragStartWorld = nil
+	dragCurrentWorld = nil
+	activeBarragePreview = nil
+	isAltRightDrag = false
+
+	return handled
+end
+
+--------------------------------------------------------------------------------
+-- 3D HOLOGRAPHIC WORLD RENDERING
+--------------------------------------------------------------------------------
+local function DrawGroundRing(cx, cy, cz, radius, r, g, b, a)
+	local segments = 32
+	local step = TWO_PI / segments
+
+	glColor(r, g, b, a * 0.2)
+	glBeginEnd(GL_TRIANGLE_FAN, function()
+		glVertex(cx, cy + 2, cz)
+		for i = 0, segments do
+			local angle = i * step
+			local px = cx + cos(angle) * radius
+			local pz = cz + sin(angle) * radius
+			local py = spGetGroundHeight(px, pz) + 2
+			glVertex(px, py, pz)
+		end
+	end)
+
+	glColor(r, g, b, a)
+	glLineWidth(2.0)
+	glBeginEnd(GL_LINE_LOOP, function()
+		for i = 0, segments - 1 do
+			local angle = i * step
+			local px = cx + cos(angle) * radius
+			local pz = cz + sin(angle) * radius
+			local py = spGetGroundHeight(px, pz) + 3
+			glVertex(px, py, pz)
+		end
+	end)
+end
+
+local function DrawParabolicLaserArc(pStart, pEnd, r, g, b, a)
+	local segments = 24
+	local dx = pEnd[1] - pStart[1]
+	local dy = pEnd[2] - pStart[2]
+	local dz = pEnd[3] - pStart[3]
+	local dist = sqrt(dx * dx + dz * dz)
+	local arcHeight = max(60, dist * 0.25)
+
+	glLineWidth(1.8)
+	glBeginEnd(GL_LINE_STRIP, function()
+		for i = 0, segments do
+			local t = i / segments
+			local px = pStart[1] + dx * t
+			local pz = pStart[3] + dz * t
+			local py = pStart[2] + dy * t + sin(t * pi) * arcHeight
+			local alpha = a * (0.35 + sin(t * pi) * 0.65)
+			glColor(r, g, b, alpha)
+			glVertex(px, py, pz)
+		end
+	end)
 end
 
 function widget:DrawWorld()
-	local curFrame = spGetGameFrame() or 0
-	local pulse = 0.80 + 0.20 * sin(animClock * 6.0)
+	if not activeBarragePreview or not activeBarragePreview.elements then return end
 
-	-- 1. RENDER ACTIVE IN-FLIGHT EXECUTIONS
-	for i = 1, #activeExecutions do
-		local exec = activeExecutions[i]
-		local totalFrames = exec.impactFrame - exec.startFrame
-		local elapsedFrames = curFrame - exec.startFrame
-		local remainingSec = max(0, (exec.impactFrame - curFrame) / 30.0)
+	local gameSecs = spGetGameSeconds()
+	local pulse = 0.85 + 0.15 * sin(gameSecs * 6.0)
 
-		-- Draw target impact zones
-		for j = 1, #exec.pairs do
-			local p = exec.pairs[j]
-			local color = p.clear and { 0.05, 0.90, 1.00, 0.85 * pulse } or { 1.00, 0.20, 0.20, 0.90 * pulse }
-			glColor(color[1], color[2], color[3], color[4])
-			glLineWidth(2.5)
-			drawHexagonGround(p.targetX, p.targetY, p.targetZ, p.aoe * 0.90)
+	glDepthTest(false)
 
-			-- If shell is in flight, draw trajectory
-			if p.fired and p.solution then
-				local flightFrames = ceil(p.flightTime * 30.0)
-				local flightProgress = (curFrame - p.scheduledFireFrame) / max(1, flightFrames)
-				drawParabolicArc(p.gunX, p.gunY, p.gunZ, p.targetX, p.targetY, p.targetZ, p.solution, { 1.00, 0.80, 0.20, 0.65 }, flightProgress)
-			end
-		end
+	local elems = activeBarragePreview.elements
+	for i = 1, #elems do
+		local elem = elems[i]
+		local tp = elem.targetPos
+		local up = elem.unitPos
 
-		-- Floating 3D Holographic Timer over Target Centroid
-		if config.showCountdownTimer and exec.centroid then
-			local cx, cy, cz = exec.centroid.x, exec.centroid.y + 70.0, exec.centroid.z
-			glPushMatrix()
-			glTranslate(cx, cy, cz)
-			glBillboard()
-			glColor(0.02, 0.05, 0.08, 0.70)
-			glRect(-90, -22, 90, 22)
-			glColor(0.05, 0.90, 1.00, 0.95)
-			glLineWidth(1.5)
-			glBeginEnd(GL_LINE_LOOP, function()
-				glVertex(-90, -22, 0)
-				glVertex(90, -22, 0)
-				glVertex(90, 22, 0)
-				glVertex(-90, 22, 0)
-			end)
-			local timerStr = string.format("T.O.T. IMPACT: %.2fs", remainingSec)
-			glText(timerStr, 0, -5, 14, "oc")
-			glPopMatrix()
-		end
+		-- 1. Holographic Impact Zone
+		DrawGroundRing(tp[1], tp[2], tp[3], elem.aoe, 0.2, 0.9, 1.0, 0.85 * pulse)
+
+		-- 2. Inner Crosshair
+		local chSize = elem.aoe * 0.4
+		glColor(0.3, 1.0, 0.9, 0.7 * pulse)
+		glLineWidth(1.5)
+		glBeginEnd(GL_LINES, function()
+			glVertex(tp[1] - chSize, tp[2] + 4, tp[3])
+			glVertex(tp[1] + chSize, tp[2] + 4, tp[3])
+			glVertex(tp[1], tp[2] + 4, tp[3] - chSize)
+			glVertex(tp[1], tp[2] + 4, tp[3] + chSize)
+		end)
+
+		-- 3. Parabolic Trajectory Arc from Muzzle to Target
+		DrawParabolicLaserArc(up, tp, 0.1, 0.85, 1.0, 0.7)
 	end
 
-	-- 2. RENDER INTERACTIVE PREVIEW PLAN DURING DRAG
-	if isDragging and currentPlan then
-		local pairsList = currentPlan.pairs
-		for i = 1, #pairsList do
-			local p = pairsList[i]
-			local col = p.clear and { 0.15, 1.00, 0.50, 0.85 * pulse } or { 1.00, 0.15, 0.15, 0.95 * pulse }
-
-			-- Hexagonal Saturation Cell
-			glColor(col[1], col[2], col[3], col[4])
-			glLineWidth(2.0)
-			drawHexagonGround(p.targetX, p.targetY, p.targetZ, p.aoe * 0.90)
-
-			-- Center Reticle Danger Ring
-			glColor(col[1], col[2], col[3], 0.45)
-			drawCircleGround(p.targetX, p.targetY, p.targetZ, p.aoe * 0.35)
-
-			-- Trajectory Arcs
-			if config.showTrajectoryArcs and p.solution then
-				local arcCol = p.clear and { 0.00, 0.85, 1.00, 0.55 } or { 1.00, 0.25, 0.25, 0.85 }
-				drawParabolicArc(p.gunX, p.gunY, p.gunZ, p.targetX, p.targetY, p.targetZ, p.solution, arcCol, nil)
+	-- Connecting Barrage Boundary
+	if #elems >= 2 then
+		glColor(0.2, 0.95, 1.0, 0.5)
+		glLineWidth(2.0)
+		glBeginEnd(GL_LINE_STRIP, function()
+			for i = 1, #elems do
+				local tp = elems[i].targetPos
+				glVertex(tp[1], tp[2] + 5, tp[3])
 			end
-		end
-
-		-- Holographic Setup Marker over Centroid
-		if currentPlan.centroid then
-			local cx, cy, cz = currentPlan.centroid.x, currentPlan.centroid.y + 60.0, currentPlan.centroid.z
-			glPushMatrix()
-			glTranslate(cx, cy, cz)
-			glBillboard()
-			glColor(0.02, 0.05, 0.08, 0.75)
-			glRect(-110, -26, 110, 26)
-			glColor(0.15, 1.00, 0.50, 0.95)
-			glLineWidth(1.8)
-			glBeginEnd(GL_LINE_LOOP, function()
-				glVertex(-110, -26, 0)
-				glVertex(110, -26, 0)
-				glVertex(110, 26, 0)
-				glVertex(-110, 26, 0)
-			end)
-			local previewStr = string.format("T.O.T. SYNC: %d GUNS | %.1fs", currentPlan.unitCount, currentPlan.totDelay)
-			glText(previewStr, 0, 4, 12, "oc")
-			glColor(0.85, 0.85, 0.85, 0.80)
-			glText(string.format("SPREAD: %.1fx (Wheel to adjust)", config.spreadMultiplier), 0, -14, 10, "oc")
-			glPopMatrix()
-		end
+		end)
 	end
 
+	glDepthTest(true)
 	glColor(1, 1, 1, 1)
 	glLineWidth(1.0)
 end
 
 --------------------------------------------------------------------------------
--- 2D Screen HUD Widget & Status Indicator
+-- 2D SCREEN HUD (GLASSMORPHIC TACTICAL OVERLAY)
 --------------------------------------------------------------------------------
 function widget:DrawScreen()
-	local arties = getSelectedArtillery()
-	if #arties == 0 and not targetingModeActive then return end
+	if not activeBarragePreview then return end
 
 	local vsx, vsy = spGetViewGeometry()
-	local bw, bh = 220, 44
-	local bx = vsx * 0.5 - bw * 0.5
-	local by = 65
+	local hudW = 340
+	local hudH = 75
+	local hudX = (vsx - hudW) * 0.5
+	local hudY = vsy - 120
 
-	-- Glassmorphic Tactical Status Bar
-	glColor(0.02, 0.04, 0.07, 0.82)
-	glRect(bx, by, bx + bw, by + bh)
+	-- Backdrop Glass
+	glColor(0.02, 0.05, 0.09, 0.82)
+	glRect(hudX, hudY, hudX + hudW, hudY + hudH)
 
-	local borderColor = targetingModeActive and { 1.00, 0.75, 0.15, 0.95 } or { 0.15, 0.85, 1.00, 0.75 }
-	glColor(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
-	glLineWidth(1.8)
+	-- Glowing Cyan Border
+	glColor(0.18, 0.85, 1.0, 0.85)
+	glLineWidth(1.5)
 	glBeginEnd(GL_LINE_LOOP, function()
-		glVertex(bx, by)
-		glVertex(bx + bw, by)
-		glVertex(bx + bw, by + bh)
-		glVertex(bx, by + bh)
+		glVertex(hudX, hudY)
+		glVertex(hudX + hudW, hudY)
+		glVertex(hudX + hudW, hudY + hudH)
+		glVertex(hudX, hudY + hudH)
 	end)
 
-	-- Header text
-	if targetingModeActive then
-		glColor(1.00, 0.80, 0.20, 1.0)
-		glText("T.O.T. BARRAGE [ACTIVE]", bx + bw * 0.5, by + 24, 13, "oc")
-		glColor(0.85, 0.85, 0.85, 0.85)
-		glText("Left-Click Drag to Target | Wheel for Spread", bx + bw * 0.5, by + 9, 10, "oc")
-	else
-		glColor(0.15, 0.85, 1.00, 1.0)
-		glText(string.format("CARPET BARRAGE (B) [%d ARTILLERY]", #arties), bx + bw * 0.5, by + 24, 12, "oc")
-		glColor(0.70, 0.80, 0.85, 0.80)
-		glText("Press 'B' or Alt+Right Drag to Saturation Fire", bx + bw * 0.5, by + 9, 10, "oc")
-	end
+	-- Header Title
+	local title = activeBarragePreview.isArea and "HEXAGONAL CARPET BARRAGE (TOT)" or "LINEAR CARPET BARRAGE (TOT)"
+	glText(title, hudX + 16, hudY + 48, 13, "o")
+
+	-- Detailed Salvo Info
+	local infoText = string.format("UNITS SYNCED: %d  |  TOT IMPACT: %.1fs", activeBarragePreview.totalUnits, activeBarragePreview.maxReadyTime)
+	glColor(0.7, 0.92, 1.0, 0.9)
+	glText(infoText, hudX + 16, hudY + 28, 11, "o")
+
+	local hintText = "Release to fire volley  |  Hold Ctrl for Area Hex-Grid"
+	glColor(0.5, 0.75, 0.9, 0.7)
+	glText(hintText, hudX + 16, hudY + 12, 9, "o")
 
 	glColor(1, 1, 1, 1)
-	glLineWidth(1.0)
+end
+
+--------------------------------------------------------------------------------
+-- SHUTDOWN CLEANUP
+--------------------------------------------------------------------------------
+function widget:Shutdown()
+	pendingSalvos = {}
+	activeBarragePreview = nil
+	unitWeaponCache = {}
 end

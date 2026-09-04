@@ -6,6 +6,7 @@ Custom LuaUI configuration and widgets collection for [Beyond All Reason (BAR)](
 
 - **Config/**: Configuration files and runtime state (`BYAR.lua`, `BAR_damageStats.lua`, `blueprints.json`).
 - **Widgets/**: Custom and community UI widgets:
+  - `gui_tactical_carpet_barrage`: Tactical Carpet Barrage & Time-On-Target (TOT) synchronized non-overlapping bombardment.
   - `gui_custom_build_menu`: Glassmorphic Build Menu with real-time 3D model previews, categorized tabs, and unit cost/stat displays.
   - `gui_build_watch`: Build Watch & ETA display.
   - `gui_construction_grid`: Construction placement grid.
