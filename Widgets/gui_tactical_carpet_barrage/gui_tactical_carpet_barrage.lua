@@ -920,6 +920,20 @@ end
 function widget:MousePress(mx, my, button)
 	if spIsGUIHidden and spIsGUIHidden() then return false end
 
+	-- Right-Click Cancel while holding Left-Click drag (กดซ้ายค้าง ถ้าคลิกขวายกเลิก)
+	if isDragging and button == 3 then
+		isDragging = false
+		dragStartWorld = nil
+		dragCurrentWorld = nil
+		activeBarragePreview = nil
+		hasDraggedPastThreshold = false
+		dragTargetUnitID = nil
+		hadRangeViolationLast = false
+		pcall(spPlaySoundFile, "beep4", 0.40, "ui")
+		spSetActiveCommand(0)
+		return true
+	end
+
 	local alt, ctrl, meta, shift = spGetModKeyState()
 
 	-- 1. Alt + Right-Click Drag Shortcut
@@ -1409,20 +1423,40 @@ function widget:DrawScreen()
 	local hintText = ""
 	if hasRangeAlert then
 		if activeBarragePreview.hasAnyImmobile then
-			hintText = "⚠️ IMMOBILE ARTILLERY / SILO CANNOT REACH TARGET - DRAG CLOSER"
+			hintText = "⚠️ OUT OF RANGE • Right-Click / Esc to Cancel • Drag Closer"
 		else
-			hintText = "⚠️ OUT OF RANGE: Mobile units will march towards target before discharging"
+			hintText = "⚠️ OUT OF RANGE: Units will advance to range • Right-Click / Esc to Cancel"
 		end
 	elseif isWarn then
-		hintText = "Missiles will launch automatically upon construction"
+		hintText = "Missiles will launch automatically upon construction • Right-Click / Esc to Cancel"
 	else
-		hintText = "Release to Fire  |  Hold Ctrl for Hex-Grid  |  Shift to Queue"
+		hintText = "Release to Fire  |  Right-Click / Esc to Cancel  |  Ctrl for Hex  |  Shift to Queue"
 	end
 
 	glColor(hasRangeAlert and 1.00 or 0.60, hasRangeAlert and 0.50 or 0.78, hasRangeAlert and 0.50 or 0.90, 0.85)
 	glText(hintText, hudX + 16, hudY + 8, 9, "o")
 
 	glColor(1, 1, 1, 1)
+end
+
+--------------------------------------------------------------------------------
+-- KEYBOARD INPUT HANDLER (ESC CANCELS DRAG)
+--------------------------------------------------------------------------------
+function widget:KeyPress(key, mods, isRepeat)
+	-- Escape key (27) cancels active drag session immediately
+	if (key == 27 or key == 0x01B) and isDragging then
+		isDragging = false
+		dragStartWorld = nil
+		dragCurrentWorld = nil
+		activeBarragePreview = nil
+		hasDraggedPastThreshold = false
+		dragTargetUnitID = nil
+		hadRangeViolationLast = false
+		pcall(spPlaySoundFile, "beep4", 0.40, "ui")
+		spSetActiveCommand(0)
+		return true
+	end
+	return false
 end
 
 --------------------------------------------------------------------------------
