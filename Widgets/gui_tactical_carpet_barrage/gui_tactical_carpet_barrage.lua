@@ -3,7 +3,7 @@ local widget = widget ---@type Widget
 function widget:GetInfo()
 	return {
 		name = "Tactical Carpet Barrage & TOT",
-		desc = "AAA-grade Synchronized Time-On-Target (TOT) and non-overlapping carpet bombardment for artillery, rockets, and missile silos with real-time damage tier color telemetry.",
+		desc = "AAA-grade Synchronized Time-On-Target (TOT) and non-overlapping carpet bombardment for artillery, rockets, and missile silos with real-time damage tier color telemetry and out-of-range visual alerts.",
 		author = "reforged25-source / Codex",
 		date = "2026",
 		license = "GNU GPL, v2 or later",
@@ -92,6 +92,7 @@ end
 -- Tier 2: High Explosive (500-1499)  -> Tactical Amber/Gold (1.00, 0.82, 0.15)
 -- Tier 3: Heavy Siege (1500-4999)    -> Fiery Magma Orange  (1.00, 0.42, 0.08)
 -- Tier 4: Apocalyptic/Nuke (>= 5000) -> Plasma Crimson/Pink (1.00, 0.14, 0.42)
+-- OUT OF RANGE ALERT                -> Flashing Crimson Red (1.00, 0.15, 0.15)
 
 local function FormatNumberCommas(n)
 	if not n then return "0" end
@@ -176,6 +177,7 @@ local dragTargetUnitID         = nil
 local dragShiftHeld            = false
 local hasDraggedPastThreshold  = false
 local isAreaMode               = false
+local hadRangeViolationLast    = false
 
 local activeBarragePreview     = nil
 local pendingSalvos            = {}
@@ -219,7 +221,7 @@ local function IsCarpetCapableCommand(cmdID, cmdName, cmdIndex)
 end
 
 --------------------------------------------------------------------------------
--- WEAPON & DAMAGE INTEL ENGINE (EXTRACTS RAW DAMAGE, AOE & PARALYSIS)
+-- WEAPON & DAMAGE INTEL ENGINE (EXTRACTS RAW DAMAGE, RANGE, AOE & PARALYSIS)
 --------------------------------------------------------------------------------
 local function GetUnitWeaponInfo(unitDefID)
 	if unitWeaponCache[unitDefID] ~= nil then
@@ -299,6 +301,7 @@ local function GetUnitWeaponInfo(unitDefID)
 			highTraj           = true,
 			turnRate           = 1.0,
 			isSilo             = true,
+			isImmobile         = udef.isImmobile or udef.isBuilding or (udef.speed and udef.speed < 0.1),
 			verticalClimbTime  = 8.5,
 		}
 		unitWeaponCache[unitDefID] = info
@@ -370,6 +373,7 @@ local function GetUnitWeaponInfo(unitDefID)
 		highTraj           = bestWeapon.trajectoryHeight and (bestWeapon.trajectoryHeight > 0),
 		turnRate           = max(0.2, (udef.turnRate or 300) * DEG_TO_RAD),
 		isSilo             = false,
+		isImmobile         = udef.isImmobile or udef.isBuilding or (udef.speed and udef.speed < 0.1),
 		verticalClimbTime  = 0,
 	}
 
@@ -573,7 +577,7 @@ local function MatchUnitsToTargetsZeroCrisscross(unitList, targets, dirVector)
 end
 
 --------------------------------------------------------------------------------
--- CARPET BARRAGE SOLVER (INTEGRATES DAMAGE TIER & WEAPON INTEL)
+-- CARPET BARRAGE SOLVER (INTEGRATES DAMAGE TIER, RANGE CHECKS & WEAPON INTEL)
 --------------------------------------------------------------------------------
 local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 	local rawSelected = spGetSelectedUnits()
@@ -676,24 +680,42 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		dirX, dirZ = dirX / dirLen, dirZ / dirLen
 	end
 
-	-- 3. Pair Units with Targets, Solve Physics & Calculate Damage
+	-- 3. Pair Units with Targets, Solve Physics, Range Checks & Damage
 	local salvoElements = {}
 	local maxReadyTime = 0
 	local currentFrame = spGetGameFrame()
 	local totalSalvoDamage = 0
 	local highestDamageProfile = nil
 	local highestDamage = -1
+	local outOfRangeCount = 0
+	local minRangeCount = 0
+	local maxWeaponRangeFound = 0
+	local hasAnyImmobile = false
 
 	if singleUnitRepeats then
 		local u = validUnits[1]
 		local prof = u.winfo.damageProfile
 		highestDamageProfile = prof
+		if u.winfo.isImmobile then hasAnyImmobile = true end
+		maxWeaponRangeFound = u.winfo.range
 
 		for k = 1, #targets do
 			local t = targets[k]
 			local dx = t[1] - u.pos[1]
 			local dy = t[2] - u.pos[2]
 			local dz = t[3] - u.pos[3]
+			local horizDist = sqrt(dx * dx + dz * dz)
+
+			-- Dynamic range including Spring elevation advantage (shooter height vs target)
+			local elevationBonus = max(0, -dy * 0.25)
+			local effectiveMaxRange = (u.winfo.range or 72000) + elevationBonus
+			local effectiveMinRange = u.winfo.minRange or 0
+
+			local isOutOfRange = (horizDist > effectiveMaxRange)
+			local isMinRange = (effectiveMinRange > 0 and horizDist < effectiveMinRange)
+
+			if isOutOfRange then outOfRangeCount = outOfRangeCount + 1 end
+			if isMinRange then minRangeCount = minRangeCount + 1 end
 
 			local flightTime = SolveFlightTime(dx, dy, dz, u.winfo)
 			local slewTime = SolveTurretSlewTime(u.pos[1], u.pos[3], u.heading, t[1], t[3], u.winfo.turnRate)
@@ -703,19 +725,26 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 			totalSalvoDamage = totalSalvoDamage + u.winfo.damage
 
 			salvoElements[k] = {
-				unitID         = u.id,
-				unitPos        = u.pos,
-				targetPos      = t,
-				aoe            = u.winfo.aoe,
-				damage         = u.winfo.damage,
-				damageProfile  = prof,
-				flightTime     = flightTime,
-				slewTime       = slewTime,
-				readyTime      = totalTimeToImpact,
-				isQueued       = (k > 1),
-				seqDelaySec    = seqDelaySec,
-				delayFrames    = 0,
-				fireFrame      = currentFrame,
+				unitID            = u.id,
+				unitPos           = u.pos,
+				targetPos         = t,
+				aoe               = u.winfo.aoe,
+				damage            = u.winfo.damage,
+				damageProfile     = prof,
+				flightTime        = flightTime,
+				slewTime          = slewTime,
+				readyTime         = totalTimeToImpact,
+				isQueued          = (k > 1),
+				seqDelaySec       = seqDelaySec,
+				delayFrames       = 0,
+				fireFrame         = currentFrame,
+				horizDist         = horizDist,
+				effectiveMaxRange = effectiveMaxRange,
+				effectiveMinRange = effectiveMinRange,
+				isOutOfRange      = isOutOfRange,
+				isMinRange        = isMinRange,
+				rangeViolation    = (isOutOfRange or isMinRange),
+				isImmobile        = u.winfo.isImmobile,
 			}
 			maxReadyTime = max(maxReadyTime, totalTimeToImpact)
 		end
@@ -726,9 +755,26 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 			local u = p.unit
 			local t = p.target
 
+			if u.winfo.isImmobile then hasAnyImmobile = true end
+			if (u.winfo.range or 0) > maxWeaponRangeFound then
+				maxWeaponRangeFound = u.winfo.range or 0
+			end
+
 			local dx = t[1] - u.pos[1]
 			local dy = t[2] - u.pos[2]
 			local dz = t[3] - u.pos[3]
+			local horizDist = sqrt(dx * dx + dz * dz)
+
+			-- Dynamic range including Spring elevation advantage
+			local elevationBonus = max(0, -dy * 0.25)
+			local effectiveMaxRange = (u.winfo.range or 72000) + elevationBonus
+			local effectiveMinRange = u.winfo.minRange or 0
+
+			local isOutOfRange = (horizDist > effectiveMaxRange)
+			local isMinRange = (effectiveMinRange > 0 and horizDist < effectiveMinRange)
+
+			if isOutOfRange then outOfRangeCount = outOfRangeCount + 1 end
+			if isMinRange then minRangeCount = minRangeCount + 1 end
 
 			local flightTime = SolveFlightTime(dx, dy, dz, u.winfo)
 			local slewTime = SolveTurretSlewTime(u.pos[1], u.pos[3], u.heading, t[1], t[3], u.winfo.turnRate)
@@ -745,16 +791,23 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 			end
 
 			salvoElements[k] = {
-				unitID         = u.id,
-				unitPos        = u.pos,
-				targetPos      = t,
-				aoe            = u.winfo.aoe,
-				damage         = u.winfo.damage,
-				damageProfile  = u.winfo.damageProfile,
-				flightTime     = flightTime,
-				slewTime       = slewTime,
-				readyTime      = readyTime,
-				isQueued       = false,
+				unitID            = u.id,
+				unitPos           = u.pos,
+				targetPos         = t,
+				aoe               = u.winfo.aoe,
+				damage            = u.winfo.damage,
+				damageProfile     = u.winfo.damageProfile,
+				flightTime        = flightTime,
+				slewTime          = slewTime,
+				readyTime         = readyTime,
+				isQueued          = false,
+				horizDist         = horizDist,
+				effectiveMaxRange = effectiveMaxRange,
+				effectiveMinRange = effectiveMinRange,
+				isOutOfRange      = isOutOfRange,
+				isMinRange        = isMinRange,
+				rangeViolation    = (isOutOfRange or isMinRange),
+				isImmobile        = u.winfo.isImmobile,
 			}
 		end
 
@@ -780,6 +833,12 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		pStart               = pStart,
 		pEnd                 = pEnd,
 		isArea               = isArea,
+		outOfRangeCount      = outOfRangeCount,
+		minRangeCount        = minRangeCount,
+		hasRangeViolation    = (outOfRangeCount > 0 or minRangeCount > 0),
+		allOutOfRange        = (outOfRangeCount == #salvoElements),
+		maxWeaponRange       = maxWeaponRangeFound,
+		hasAnyImmobile       = hasAnyImmobile,
 	}
 end
 
@@ -821,8 +880,9 @@ local function ExecuteCarpetBarrage(plan, shiftHeld)
 	pcall(spPlaySoundFile, "beep4", 0.75, "ui")
 	if spEcho then
 		local salvoType = plan.dominantProfile and plan.dominantProfile.tag or "BARRAGE"
-		spEcho(string.format("[Carpet Barrage] %s Salvo Deployed: %d warheads | Total Yield: %s DMG!",
-			salvoType, #plan.elements, FormatNumberCommas(plan.totalDamage)))
+		local warningNote = plan.hasRangeViolation and string.format(" [⚠️ %d OUT OF RANGE]", plan.outOfRangeCount) or ""
+		spEcho(string.format("[Carpet Barrage] %s Salvo Deployed: %d warheads | Total Yield: %s DMG%s!",
+			salvoType, #plan.elements, FormatNumberCommas(plan.totalDamage), warningNote))
 	end
 end
 
@@ -870,6 +930,7 @@ function widget:MousePress(mx, my, button)
 			if gpos then
 				isDragging = true
 				hasDraggedPastThreshold = false
+				hadRangeViolationLast = false
 				dragStartScreen.x = mx
 				dragStartScreen.y = my
 				dragCommandID = CMD_ATTACK
@@ -894,6 +955,7 @@ function widget:MousePress(mx, my, button)
 				if gpos then
 					isDragging = true
 					hasDraggedPastThreshold = false
+					hadRangeViolationLast = false
 					dragStartScreen.x = mx
 					dragStartScreen.y = my
 					dragCommandID = (activeCmdID and activeCmdID > 0) and activeCmdID or CMD_ATTACK
@@ -926,8 +988,19 @@ function widget:MouseMove(mx, my, dx, dy, button)
 		if sDist >= DRAG_PIXEL_THRESHOLD then
 			hasDraggedPastThreshold = true
 			activeBarragePreview = BuildCarpetBarragePlan(dragCommandID, dragStartWorld, dragCurrentWorld, isAreaMode)
+
+			-- Audio warning feedback on first out-of-range breach
+			if activeBarragePreview and activeBarragePreview.hasRangeViolation then
+				if not hadRangeViolationLast then
+					hadRangeViolationLast = true
+					pcall(spPlaySoundFile, "beep4", 0.45, "ui")
+				end
+			else
+				hadRangeViolationLast = false
+			end
 		else
 			activeBarragePreview = nil
+			hadRangeViolationLast = false
 		end
 	end
 
@@ -972,16 +1045,17 @@ function widget:MouseRelease(mx, my, button)
 	activeBarragePreview = nil
 	hasDraggedPastThreshold = false
 	dragTargetUnitID = nil
+	hadRangeViolationLast = false
 
 	return true
 end
 
 --------------------------------------------------------------------------------
--- ZERO-GC DAMAGE-TIER HOLOGRAPHIC WORLD RENDERING
+-- ZERO-GC DAMAGE-TIER HOLOGRAPHIC WORLD RENDERING WITH RANGE ALERTS
 --------------------------------------------------------------------------------
-local function DrawGroundRingZeroGC(cx, cy, cz, radius, r, g, b, a, isNuclear)
-	-- Subtle translucent damage-tinted fill
-	glColor(r, g, b, a * 0.18)
+local function DrawGroundRingZeroGC(cx, cy, cz, radius, r, g, b, a, isNuclear, isOutOfRange)
+	-- Subtle translucent damage-tinted or alert fill
+	glColor(r, g, b, a * (isOutOfRange and 0.28 or 0.18))
 	glBeginEnd(GL_TRIANGLE_FAN, function()
 		glVertex(cx, cy + 4, cz)
 		for i = 0, CIRCLE_SEGMENTS do
@@ -991,9 +1065,9 @@ local function DrawGroundRingZeroGC(cx, cy, cz, radius, r, g, b, a, isNuclear)
 		end
 	end)
 
-	-- High-contrast damage-colored outer perimeter ring
+	-- High-contrast outer perimeter ring
 	glColor(r, g, b, a)
-	glLineWidth(2.6)
+	glLineWidth(isOutOfRange and 3.0 or 2.6)
 	glBeginEnd(GL_LINE_LOOP, function()
 		for i = 0, CIRCLE_SEGMENTS - 1 do
 			local px = cx + CIRCLE_COS[i] * radius
@@ -1003,7 +1077,7 @@ local function DrawGroundRingZeroGC(cx, cy, cz, radius, r, g, b, a, isNuclear)
 	end)
 
 	-- Concentric Shockwave Pulse for Nuclear / Apocalyptic Tier (>= 5,000 DMG)
-	if isNuclear then
+	if isNuclear and not isOutOfRange then
 		glColor(r, g, b, a * 0.70)
 		glLineWidth(1.8)
 		glBeginEnd(GL_LINE_LOOP, function()
@@ -1017,7 +1091,7 @@ local function DrawGroundRingZeroGC(cx, cy, cz, radius, r, g, b, a, isNuclear)
 	end
 end
 
-local function DrawBallisticLaserArc(pStart, pEnd, r, g, b, a, isSilo)
+local function DrawBallisticLaserArc(pStart, pEnd, r, g, b, a, isSilo, isOutOfRange)
 	local segments = 28
 	local dx = pEnd[1] - pStart[1]
 	local dy = pEnd[2] - pStart[2]
@@ -1025,7 +1099,7 @@ local function DrawBallisticLaserArc(pStart, pEnd, r, g, b, a, isSilo)
 	local dist = sqrt(dx * dx + dz * dz)
 	local arcHeight = isSilo and max(250, dist * 0.45) or max(80, dist * 0.26)
 
-	glLineWidth(2.4)
+	glLineWidth(isOutOfRange and 2.8 or 2.4)
 	glBeginEnd(GL_LINE_STRIP, function()
 		for i = 0, segments do
 			local t = i / segments
@@ -1033,6 +1107,10 @@ local function DrawBallisticLaserArc(pStart, pEnd, r, g, b, a, isSilo)
 			local pz = pStart[3] + dz * t
 			local py = pStart[2] + dy * t + sin(t * pi) * arcHeight
 			local alpha = a * (0.30 + sin(t * pi) * 0.70)
+			if isOutOfRange and (i % 2 == 1) then
+				-- Dashed warning arc for out of range
+				alpha = alpha * 0.20
+			end
 			glColor(r, g, b, alpha)
 			glVertex(px, py, pz)
 		end
@@ -1043,7 +1121,8 @@ function widget:DrawWorld()
 	if not activeBarragePreview or not activeBarragePreview.elements then return end
 
 	local gameSecs = spGetGameSeconds()
-	local pulse = 0.82 + 0.18 * sin(gameSecs * 6.5)
+	local normalPulse = 0.82 + 0.18 * sin(gameSecs * 6.5)
+	local alertStrobe = 0.55 + 0.45 * sin(gameSecs * 14.0)
 
 	glDepthTest(false)
 
@@ -1057,38 +1136,74 @@ function widget:DrawWorld()
 		local tp = elem.targetPos
 		local up = elem.unitPos
 		local prof = elem.damageProfile or domProf
+		local isOut = elem.isOutOfRange
+		local isMin = elem.isMinRange
 
-		-- Determine Reticle Color: Stockpile Warning Amber overrides, otherwise uses weapon damage tier
-		local ringR = isWarn and 1.00 or prof.r
-		local ringG = isWarn and 0.55 or prof.g
-		local ringB = isWarn and 0.10 or prof.b
+		-- Determine Reticle Color: Out of range (Crimson Red) > Min range (Amber-Orange) > Stockpile Warn > Damage Tier
+		local ringR, ringG, ringB, ringPulse
+		if isOut then
+			ringR = 1.00
+			ringG = 0.10 * alertStrobe
+			ringB = 0.15 * alertStrobe
+			ringPulse = alertStrobe
+		elseif isMin then
+			ringR = 1.00
+			ringG = 0.45 * alertStrobe
+			ringB = 0.05
+			ringPulse = alertStrobe
+		elseif isWarn then
+			ringR = 1.00
+			ringG = 0.55
+			ringB = 0.10
+			ringPulse = normalPulse
+		else
+			ringR = prof.r
+			ringG = prof.g
+			ringB = prof.b
+			ringPulse = normalPulse
+		end
+
 		local isNuke = (prof.tier == 4)
 
 		-- Ground Impact Blast Reticle
-		DrawGroundRingZeroGC(tp[1], tp[2], tp[3], elem.aoe, ringR, ringG, ringB, 0.88 * pulse, isNuke)
+		DrawGroundRingZeroGC(tp[1], tp[2], tp[3], elem.aoe, ringR, ringG, ringB, 0.88 * ringPulse, isNuke, isOut or isMin)
 
-		-- Pulsing Crosshairs
+		-- Reticle Crosshairs or Forbidden "X"
 		local chSize = elem.aoe * 0.42
-		glColor(ringR, ringG, ringB, 0.88 * pulse)
-		glLineWidth(2.0)
-		glBeginEnd(GL_LINES, function()
-			glVertex(tp[1] - chSize, tp[2] + 6, tp[3])
-			glVertex(tp[1] + chSize, tp[2] + 6, tp[3])
-			glVertex(tp[1], tp[2] + 6, tp[3] - chSize)
-			glVertex(tp[1], tp[2] + 6, tp[3] + chSize)
-		end)
+		glColor(ringR, ringG, ringB, 0.90 * ringPulse)
 
-		-- Trajectory Flight Arc
-		DrawBallisticLaserArc(up, tp, ringR, ringG, ringB, 0.78, isSilo)
+		if isOut or isMin then
+			-- Heavy "X" Forbidden Mark for Range Violations
+			glLineWidth(2.5)
+			glBeginEnd(GL_LINES, function()
+				glVertex(tp[1] - chSize, tp[2] + 7, tp[3] - chSize)
+				glVertex(tp[1] + chSize, tp[2] + 7, tp[3] + chSize)
+				glVertex(tp[1] - chSize, tp[2] + 7, tp[3] + chSize)
+				glVertex(tp[1] + chSize, tp[2] + 7, tp[3] - chSize)
+			end)
+		else
+			-- Standard Precision Crosshairs
+			glLineWidth(2.0)
+			glBeginEnd(GL_LINES, function()
+				glVertex(tp[1] - chSize, tp[2] + 6, tp[3])
+				glVertex(tp[1] + chSize, tp[2] + 6, tp[3])
+				glVertex(tp[1], tp[2] + 6, tp[3] - chSize)
+				glVertex(tp[1], tp[2] + 6, tp[3] + chSize)
+			end)
+		end
+
+		-- Trajectory Flight Arc (with range alert styling)
+		DrawBallisticLaserArc(up, tp, ringR, ringG, ringB, 0.80, isSilo, isOut or isMin)
 	end
 
-	-- Interconnecting tactical salvo line colored by dominant damage tier
+	-- Interconnecting tactical salvo line colored by dominant damage tier or alert
 	if #elems >= 2 then
-		local lineR = isWarn and 1.00 or domProf.r
-		local lineG = isWarn and 0.55 or domProf.g
-		local lineB = isWarn and 0.10 or domProf.b
+		local hasAlert = activeBarragePreview.hasRangeViolation
+		local lineR = hasAlert and 1.00 or (isWarn and 1.00 or domProf.r)
+		local lineG = hasAlert and (0.15 * alertStrobe) or (isWarn and 0.55 or domProf.g)
+		local lineB = hasAlert and (0.18 * alertStrobe) or (isWarn and 0.10 or domProf.b)
 
-		glColor(lineR, lineG, lineB, 0.65)
+		glColor(lineR, lineG, lineB, 0.70)
 		glLineWidth(2.2)
 		glBeginEnd(GL_LINE_STRIP, function()
 			for i = 1, #elems do
@@ -1104,64 +1219,130 @@ function widget:DrawWorld()
 end
 
 --------------------------------------------------------------------------------
--- 2D SCREEN HUD & 3D WORLD DAMAGE TELEMETRY
+-- 2D SCREEN HUD & 3D WORLD TELEMETRY WITH RANGE WARNINGS
 --------------------------------------------------------------------------------
 function widget:DrawScreen()
 	if not activeBarragePreview or not activeBarragePreview.elements then return end
+
+	local gameSecs = spGetGameSeconds()
+	local alertPulse = 0.55 + 0.45 * sin(gameSecs * 14.0)
 
 	local vsx, vsy = spGetViewGeometry()
 	local elems = activeBarragePreview.elements
 	local isSilo = activeBarragePreview.isSilo
 	local isWarn = activeBarragePreview.stockWarning
 	local domProf = activeBarragePreview.dominantProfile
+	local hasRangeAlert = activeBarragePreview.hasRangeViolation
 
-	-- 1. Draw 3D-Projected Countdown & Damage Labels Above Each Target Reticle
+	-- 1. Draw 3D-Projected Countdown, Range Alerts & Damage Labels Above Each Target Reticle
 	for i = 1, #elems do
 		local elem = elems[i]
 		local prof = elem.damageProfile or domProf
+		local isOut = elem.isOutOfRange
+		local isMin = elem.isMinRange
 		local sx, sy = spWorldToScreenCoords(elem.targetPos[1], elem.targetPos[2] + 20, elem.targetPos[3])
 
 		if sx and sy and sx > 0 and sy > 0 and sx < vsx and sy < vsy then
-			local timerStr = string.format("T-%04.1fs", elem.readyTime)
-			local dmgStr = prof.isEMP and string.format("[%s EMP]", FormatNumberCommas(elem.damage))
-				or string.format("[%s DMG]", FormatNumberCommas(elem.damage))
+			if isOut then
+				-- Out-of-Range Emergency Alert Label
+				local overDist = floor(elem.horizDist - elem.effectiveMaxRange)
+				local alertStr = "⚠️ [ OUT OF RANGE ]"
+				local rangeDetail = string.format("%dm (MAX %dm  +%dm)", floor(elem.horizDist), floor(elem.effectiveMaxRange), overDist)
+				local dmgStr = string.format("[%s %s]", FormatNumberCommas(elem.damage), prof.isEMP and "EMP" or "DMG")
 
-			-- Shadow / Outline
-			glColor(0.0, 0.0, 0.0, 0.90)
-			glText(timerStr, sx + 1, sy + 11, 11, "cn")
-			glText(dmgStr, sx + 1, sy - 1, 10, "cn")
+				-- Shadow
+				glColor(0.0, 0.0, 0.0, 0.95)
+				glText(alertStr, sx + 1, sy + 21, 11, "cn")
+				glText(rangeDetail, sx + 1, sy + 7, 10, "cn")
+				glText(dmgStr, sx + 1, sy - 7, 9, "cn")
 
-			-- Countdown Color
-			if isWarn then
-				glColor(1.0, 0.60, 0.10, 1.0)
+				-- Flashing Crimson Warning
+				glColor(1.00, 0.15 * alertPulse, 0.20 * alertPulse, 1.0)
+				glText(alertStr, sx, sy + 22, 11, "cn")
+
+				glColor(1.00, 0.70, 0.70, 0.95)
+				glText(rangeDetail, sx, sy + 8, 10, "cn")
+
+				glColor(prof.r * 0.75, prof.g * 0.75, prof.b * 0.75, 0.80)
+				glText(dmgStr, sx, sy - 6, 9, "cn")
+
+			elseif isMin then
+				-- Minimum-Range Caution Label
+				local underDist = floor(elem.effectiveMinRange - elem.horizDist)
+				local alertStr = "⚠️ [ TOO CLOSE (MIN RANGE) ]"
+				local rangeDetail = string.format("%dm (MIN %dm  -%dm)", floor(elem.horizDist), floor(elem.effectiveMinRange), underDist)
+				local dmgStr = string.format("[%s %s]", FormatNumberCommas(elem.damage), prof.isEMP and "EMP" or "DMG")
+
+				glColor(0.0, 0.0, 0.0, 0.95)
+				glText(alertStr, sx + 1, sy + 21, 11, "cn")
+				glText(rangeDetail, sx + 1, sy + 7, 10, "cn")
+				glText(dmgStr, sx + 1, sy - 7, 9, "cn")
+
+				glColor(1.00, 0.50 * alertPulse, 0.10, 1.0)
+				glText(alertStr, sx, sy + 22, 11, "cn")
+
+				glColor(1.00, 0.80, 0.60, 0.95)
+				glText(rangeDetail, sx, sy + 8, 10, "cn")
+
+				glColor(prof.r * 0.75, prof.g * 0.75, prof.b * 0.75, 0.80)
+				glText(dmgStr, sx, sy - 6, 9, "cn")
+
 			else
-				glColor(0.95, 0.95, 0.95, 1.0)
-			end
-			glText(timerStr, sx, sy + 12, 11, "cn")
+				-- Standard Clean In-Range Telemetry Label
+				local timerStr = string.format("T-%04.1fs", elem.readyTime)
+				local distStr = string.format("%dm / %dm", floor(elem.horizDist), floor(elem.effectiveMaxRange))
+				local dmgStr = prof.isEMP and string.format("[%s EMP]", FormatNumberCommas(elem.damage))
+					or string.format("[%s DMG]", FormatNumberCommas(elem.damage))
 
-			-- Damage Color (Exact match with damage tier!)
-			glColor(prof.r, prof.g, prof.b, 1.0)
-			glText(dmgStr, sx, sy, 10, "cn")
+				glColor(0.0, 0.0, 0.0, 0.90)
+				glText(timerStr, sx + 1, sy + 21, 11, "cn")
+				glText(distStr, sx + 1, sy + 7, 9, "cn")
+				glText(dmgStr, sx + 1, sy - 7, 10, "cn")
+
+				if isWarn then
+					glColor(1.0, 0.60, 0.10, 1.0)
+				else
+					glColor(0.95, 0.95, 0.95, 1.0)
+				end
+				glText(timerStr, sx, sy + 22, 11, "cn")
+
+				glColor(0.70, 0.85, 0.95, 0.85)
+				glText(distStr, sx, sy + 8, 9, "cn")
+
+				glColor(prof.r, prof.g, prof.b, 1.0)
+				glText(dmgStr, sx, sy - 6, 10, "cn")
+			end
 		end
 	end
 
 	-- 2. Glassmorphic Military HUD
-	local hudW = 440
-	local hudH = 92
+	local hudW = 460
+	local hudH = 96
 	local hudX = (vsx - hudW) * 0.5
-	local hudY = vsy - 130
+	local hudY = vsy - 135
 
-	local borderR = isWarn and 1.00 or domProf.r
-	local borderG = isWarn and 0.55 or domProf.g
-	local borderB = isWarn and 0.10 or domProf.b
+	local borderR, borderG, borderB
+	if hasRangeAlert then
+		borderR = 1.00
+		borderG = 0.18 * alertPulse
+		borderB = 0.20 * alertPulse
+	elseif isWarn then
+		borderR = 1.00
+		borderG = 0.55
+		borderB = 0.10
+	else
+		borderR = domProf.r
+		borderG = domProf.g
+		borderB = domProf.b
+	end
 
 	-- Backdrop Glass
 	glColor(0.012, 0.032, 0.070, 0.92)
 	glRect(hudX, hudY, hudX + hudW, hudY + hudH)
 
-	-- Glowing Tech Border tinted by dominant damage tier
-	glColor(borderR, borderG, borderB, 0.92)
-	glLineWidth(2.2)
+	-- Glowing Tech Border tinted by range alert or dominant damage tier
+	glColor(borderR, borderG, borderB, 0.95)
+	glLineWidth(hasRangeAlert and 2.6 or 2.2)
 	glBeginEnd(GL_LINE_LOOP, function()
 		glVertex(hudX, hudY)
 		glVertex(hudX + hudW, hudY)
@@ -1169,24 +1350,35 @@ function widget:DrawScreen()
 		glVertex(hudX, hudY + hudH)
 	end)
 
-	-- Header Title + Damage Tier Badge
+	-- Header Title + Alert / Damage Tier Badge
 	local baseType = ""
 	if isSilo then
 		baseType = isWarn and "ICBM SILO (QUEUED)" or "ICBM NUCLEAR SALVO"
 	else
 		baseType = activeBarragePreview.isArea and "HEX BARRAGE (TOT)" or "LINEAR CARPET (TOT)"
 	end
-	local headerText = string.format("%s  •  [%s]", baseType, domProf.tag)
+
+	local headerText = ""
+	if activeBarragePreview.allOutOfRange then
+		headerText = string.format("%s  •  [ ⚠️ ALL TARGETS OUT OF RANGE ]", baseType)
+	elseif hasRangeAlert then
+		headerText = string.format("%s  •  [ ⚠️ OUT OF RANGE: %d/%d UNITS ]", baseType, activeBarragePreview.outOfRangeCount, activeBarragePreview.totalUnits)
+	else
+		headerText = string.format("%s  •  [%s]", baseType, domProf.tag)
+	end
 
 	glColor(borderR, borderG, borderB, 1.0)
-	glText(headerText, hudX + 16, hudY + 62, 12, "o")
+	glText(headerText, hudX + 16, hudY + 66, 12, "o")
 
-	-- Detailed Salvo Telemetry (Total Warheads, Total Damage, and TOT / Sequential Timing)
+	-- Detailed Salvo Telemetry
 	local telemetryStr = ""
 	local dmgFormatted = FormatNumberCommas(activeBarragePreview.totalDamage)
 	local dmgUnit = domProf.isEMP and "EMP" or "DMG"
 
-	if isSilo and activeBarragePreview.isSingleUnit then
+	if hasRangeAlert then
+		telemetryStr = string.format("SALVO: %d UNITS  |  TOTAL: %s %s  |  ⚠️ %d OUT OF RANGE (MAX %dm)",
+			activeBarragePreview.totalUnits, dmgFormatted, dmgUnit, activeBarragePreview.outOfRangeCount, floor(activeBarragePreview.maxWeaponRange or 0))
+	elseif isSilo and activeBarragePreview.isSingleUnit then
 		telemetryStr = string.format("SALVO: %d WARHEADS  |  TOTAL: %s %s  |  SEQ: %.1fs -> %.1fs",
 			activeBarragePreview.totalUnits, dmgFormatted, dmgUnit, elems[1].readyTime, activeBarragePreview.maxReadyTime)
 	else
@@ -1194,11 +1386,11 @@ function widget:DrawScreen()
 			activeBarragePreview.totalUnits, dmgFormatted, dmgUnit, activeBarragePreview.maxReadyTime)
 	end
 	glColor(0.90, 0.95, 1.0, 0.95)
-	glText(telemetryStr, hudX + 16, hudY + 38, 11, "o")
+	glText(telemetryStr, hudX + 16, hudY + 42, 11, "o")
 
 	-- Damage Intensity Visual Meter Bar
 	local meterX = hudX + 16
-	local meterY = hudY + 22
+	local meterY = hudY + 24
 	local meterW = 200
 	local meterH = 6
 	local fillFrac = min(1.0, activeBarragePreview.totalDamage / 40000)
@@ -1206,17 +1398,28 @@ function widget:DrawScreen()
 	glColor(0.10, 0.15, 0.22, 0.85)
 	glRect(meterX, meterY, meterX + meterW, meterY + meterH)
 
-	glColor(domProf.r, domProf.g, domProf.b, 0.95)
+	glColor(borderR, borderG, borderB, 0.95)
 	glRect(meterX, meterY, meterX + (meterW * fillFrac), meterY + meterH)
 
-	glColor(0.65, 0.82, 0.95, 0.75)
-	local tierNote = string.format("INTENSITY: %s", domProf.tierName)
+	local tierNote = hasRangeAlert and "⚠️ RANGE VIOLATION DETECTED" or string.format("INTENSITY: %s", domProf.tierName)
+	glColor(hasRangeAlert and 1.0 or 0.65, hasRangeAlert and 0.4 or 0.82, hasRangeAlert and 0.4 or 0.95, 0.85)
 	glText(tierNote, meterX + meterW + 12, meterY - 1, 9, "o")
 
-	-- Action Hint
-	local hintText = isWarn and "Missiles will launch automatically upon construction"
-		or "Release to Fire  |  Hold Ctrl for Hex-Grid  |  Shift to Queue"
-	glColor(0.60, 0.78, 0.90, 0.75)
+	-- Action Hint Line
+	local hintText = ""
+	if hasRangeAlert then
+		if activeBarragePreview.hasAnyImmobile then
+			hintText = "⚠️ IMMOBILE ARTILLERY / SILO CANNOT REACH TARGET - DRAG CLOSER"
+		else
+			hintText = "⚠️ OUT OF RANGE: Mobile units will march towards target before discharging"
+		end
+	elseif isWarn then
+		hintText = "Missiles will launch automatically upon construction"
+	else
+		hintText = "Release to Fire  |  Hold Ctrl for Hex-Grid  |  Shift to Queue"
+	end
+
+	glColor(hasRangeAlert and 1.00 or 0.60, hasRangeAlert and 0.50 or 0.78, hasRangeAlert and 0.50 or 0.90, 0.85)
 	glText(hintText, hudX + 16, hudY + 8, 9, "o")
 
 	glColor(1, 1, 1, 1)
@@ -1230,4 +1433,5 @@ function widget:Shutdown()
 	activeBarragePreview = nil
 	unitWeaponCache = {}
 	isDragging = false
+	hadRangeViolationLast = false
 end
