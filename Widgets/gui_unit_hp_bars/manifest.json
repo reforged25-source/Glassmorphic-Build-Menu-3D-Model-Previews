@@ -1,0 +1,9 @@
+{
+	"id": "gui_unit_hp_bars",
+	"display_name": "Unit HP Bars",
+	"author": "Codex",
+	"discord_link": "",
+	"github_link": "",
+	"description": "Keeps stock bars and ETA overlays hidden; shows HP, real-time movement speed, per-second Metal/Energy flow, shield, capture, stockpile, EMP, reload, build, ETA, M/E, feature HP and reclaimable values as text.",
+	"last_updated": "2026-08-20T00:00:00.000Z"
+}

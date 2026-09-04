@@ -1,0 +1,9 @@
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor temporary files
+*.swp
+*.bak
+*~

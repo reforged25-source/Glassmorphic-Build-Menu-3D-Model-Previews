@@ -1,0 +1,9 @@
+{
+	"id": "gui_construction_grid",
+	"display_name": "Construction Base Grid",
+	"author": "Codex",
+	"discord_link": "",
+	"github_link": "",
+	"description": "Orange ground footprints for all finished units and structures with white rounded placement grid, active only in build mode.",
+	"last_updated": "2026-08-22T00:00:00.000Z"
+}

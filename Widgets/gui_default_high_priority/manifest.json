@@ -1,0 +1,10 @@
+{
+	"id": "gui_default_high_priority",
+	"version": "1.0.0",
+	"display_name": "Default High Priority",
+	"author": "Codex",
+	"discord_link": "",
+	"github_link": "",
+	"description": "Automatically sets all newly created and finished builders, factories, and nano turrets to High Priority by default.",
+	"last_updated": "2026-08-22T19:44:00.000Z"
+}

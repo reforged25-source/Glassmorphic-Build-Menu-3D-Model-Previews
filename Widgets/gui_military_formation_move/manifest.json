@@ -1,0 +1,9 @@
+{
+	"id": "gui_military_formation_move",
+	"display_name": "Military Formation Move",
+	"author": "Codex",
+	"discord_link": "",
+	"github_link": "",
+	"description": "Tactical Military Formation Move with directional heading: Middle Click or Middle+Right Click drag to position and aim formations (Line, Box, Wedge, Column, Circle).",
+	"last_updated": "2026-08-23T00:00:00.000Z"
+}
