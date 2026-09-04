@@ -58,6 +58,7 @@ local sin                      = math.sin
 local cos                      = math.cos
 local atan2                    = math.atan2
 local floor                    = math.floor
+local ceil                     = math.ceil
 local pi                       = math.pi
 local TWO_PI                   = math.pi * 2
 local DEG_TO_RAD               = math.pi / 180
@@ -456,46 +457,95 @@ end
 --------------------------------------------------------------------------------
 -- SPATIAL TESSELLATION & CLOSE PACKING (LINEAR & A2 HEXAGONAL LATTICE)
 --------------------------------------------------------------------------------
-local function GenerateLinearTessellation(pStart, pEnd, count, avgAoE)
+local function GenerateLinearTessellation(pStart, pEnd, count, avgAoE, batteryCenter)
 	local points = {}
-	if count <= 0 then return points end
+	if count <= 0 then return points, 0, 0 end
+
+	local gy = spGetGroundHeight(pStart[1], pStart[3])
+	if count == 1 then
+		points[1] = { pStart[1], gy, pStart[3], row = 1, col = 1 }
+		return points, 1, 1
+	end
 
 	local dx = pEnd[1] - pStart[1]
 	local dz = pEnd[3] - pStart[3]
 	local totalDist = sqrt(dx * dx + dz * dz)
 
-	if count == 1 or totalDist < 1 then
-		local gy = spGetGroundHeight(pStart[1], pStart[3])
-		points[1] = { pStart[1], gy, pStart[3] }
-		return points
-	end
-
-	-- Enforce Non-Overlapping Spacing: adjacent blast centers separated by ~1.85 * AoE
 	local minStep = max(30, avgAoE * 1.85)
-	local stepDist = totalDist / (count - 1)
-	if stepDist < minStep then
-		local ux = dx / totalDist
-		local uz = dz / totalDist
+
+	-- If totalDist is nearly zero (clicked in place or tiny drag < 10 elmos)
+	if totalDist < 10 then
+		local cols = ceil(sqrt(count))
+		local rows = ceil(count / cols)
+		local halfCols = (cols - 1) * 0.5
+		local halfRows = (rows - 1) * 0.5
+		local rowH = minStep * 0.866025
+
 		for i = 0, count - 1 do
-			local curDist = i * minStep
-			local tx = pStart[1] + ux * curDist
-			local tz = pStart[3] + uz * curDist
+			local r = floor(i / cols)
+			local c = i % cols
+			local stagger = (r % 2 == 1) and (minStep * 0.5) or 0
+			local tx = pStart[1] + (c - halfCols) * minStep + stagger
+			local tz = pStart[3] + (r - halfRows) * rowH
 			local ty = spGetGroundHeight(tx, tz)
-			points[#points + 1] = { tx, ty, tz }
+			points[#points + 1] = { tx, ty, tz, row = r + 1, col = c + 1 }
 		end
-		return points
+		return points, cols, rows
 	end
 
-	local stepFrac = 1.0 / (count - 1)
+	local ux = dx / totalDist
+	local uz = dz / totalDist
+
+	-- Normal vector pointing perpendicular to drag line
+	local nx = -uz
+	local nz = ux
+
+	-- Orient normal vector so it extends away from the artillery battery (creeping forward)
+	if batteryCenter then
+		local toTargetX = pStart[1] - batteryCenter[1]
+		local toTargetZ = pStart[3] - batteryCenter[3]
+		if (nx * toTargetX + nz * toTargetZ) < 0 then
+			nx = -nx
+			nz = -nz
+		end
+	end
+
+	-- How many blast points can fit in 1 row along totalDist without overlapping?
+	local maxCols = max(1, floor(totalDist / minStep + 0.5) + 1)
+
+	-- If all points fit in a single row without overlapping:
+	if maxCols >= count then
+		local stepFrac = 1.0 / (count - 1)
+		for i = 0, count - 1 do
+			local frac = i * stepFrac
+			local tx = pStart[1] + dx * frac
+			local tz = pStart[3] + dz * frac
+			local ty = spGetGroundHeight(tx, tz)
+			points[#points + 1] = { tx, ty, tz, row = 1, col = i + 1 }
+		end
+		return points, count, 1
+	end
+
+	-- MULTI-ROW PHALANX FORMATION:
+	-- The drag is too tight/close to fit all units in one row, wrap into new rows!
+	local cols = maxCols
+	local rows = ceil(count / cols)
+	local rowSpacing = minStep * 0.8660254 -- Optimal hexagonal row height
+	local colSpacing = (cols > 1) and (totalDist / (cols - 1)) or minStep
+
 	for i = 0, count - 1 do
-		local frac = i * stepFrac
-		local tx = pStart[1] + dx * frac
-		local tz = pStart[3] + dz * frac
+		local r = floor(i / cols)
+		local c = i % cols
+
+		-- Stagger alternate rows (honeycomb offset) to fill crevices
+		local stagger = (r % 2 == 1 and cols > 1) and (colSpacing * 0.5) or 0
+		local tx = pStart[1] + ux * (c * colSpacing + stagger) + nx * (r * rowSpacing)
+		local tz = pStart[3] + uz * (c * colSpacing + stagger) + nz * (r * rowSpacing)
 		local ty = spGetGroundHeight(tx, tz)
-		points[#points + 1] = { tx, ty, tz }
+		points[#points + 1] = { tx, ty, tz, row = r + 1, col = c + 1 }
 	end
 
-	return points
+	return points, cols, rows
 end
 
 -- True 2D Euclidean A2 Hexagonal Close-Packed Lattice Generator
@@ -661,8 +711,19 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		singleUnitRepeats = true
 	end
 
+	-- Calculate Battery Center (Centroid of firing units) to orient creeping barrage forward
+	local avgBx, avgBy, avgBz = 0, 0, 0
+	for i = 1, #validUnits do
+		avgBx = avgBx + validUnits[i].pos[1]
+		avgBy = avgBy + validUnits[i].pos[2]
+		avgBz = avgBz + validUnits[i].pos[3]
+	end
+	local batteryCenter = { avgBx / #validUnits, avgBy / #validUnits, avgBz / #validUnits }
+
 	-- 2. Tessellation Points
 	local targets = {}
+	local gridCols = totalPoints
+	local gridRows = 1
 	local dirX = pEnd[1] - pStart[1]
 	local dirZ = pEnd[3] - pStart[3]
 
@@ -670,7 +731,7 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		local rad = max(avgAoE * 1.5, sqrt(dirX * dirX + dirZ * dirZ))
 		targets = GenerateHexagonalTessellation(pStart, rad, totalPoints, avgAoE)
 	else
-		targets = GenerateLinearTessellation(pStart, pEnd, totalPoints, avgAoE)
+		targets, gridCols, gridRows = GenerateLinearTessellation(pStart, pEnd, totalPoints, avgAoE, batteryCenter)
 	end
 
 	local dirLen = sqrt(dirX * dirX + dirZ * dirZ)
@@ -745,6 +806,8 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 				isMinRange        = isMinRange,
 				rangeViolation    = (isOutOfRange or isMinRange),
 				isImmobile        = u.winfo.isImmobile,
+				row               = t.row or 1,
+				col               = t.col or k,
 			}
 			maxReadyTime = max(maxReadyTime, totalTimeToImpact)
 		end
@@ -808,6 +871,8 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 				isMinRange        = isMinRange,
 				rangeViolation    = (isOutOfRange or isMinRange),
 				isImmobile        = u.winfo.isImmobile,
+				row               = t.row or 1,
+				col               = t.col or k,
 			}
 		end
 
@@ -833,6 +898,8 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		pStart               = pStart,
 		pEnd                 = pEnd,
 		isArea               = isArea,
+		gridCols             = gridCols,
+		gridRows             = gridRows,
 		outOfRangeCount      = outOfRangeCount,
 		minRangeCount        = minRangeCount,
 		hasRangeViolation    = (outOfRangeCount > 0 or minRangeCount > 0),
@@ -1219,12 +1286,44 @@ function widget:DrawWorld()
 
 		glColor(lineR, lineG, lineB, 0.70)
 		glLineWidth(2.2)
-		glBeginEnd(GL_LINE_STRIP, function()
-			for i = 1, #elems do
-				local tp = elems[i].targetPos
-				glVertex(tp[1], tp[2] + 8, tp[3])
+
+		local gridRows = activeBarragePreview.gridRows or 1
+		if gridRows > 1 then
+			-- Draw individual line along each row
+			for r = 1, gridRows do
+				glBeginEnd(GL_LINE_STRIP, function()
+					for i = 1, #elems do
+						local elem = elems[i]
+						if (elem.row or 1) == r then
+							local tp = elem.targetPos
+							glVertex(tp[1], tp[2] + 8, tp[3])
+						end
+					end
+				end)
 			end
-		end)
+			-- Connect columns between adjacent rows
+			glLineWidth(1.6)
+			glColor(lineR, lineG, lineB, 0.35)
+			glBeginEnd(GL_LINES, function()
+				for i = 1, #elems do
+					local elemA = elems[i]
+					for j = 1, #elems do
+						local elemB = elems[j]
+						if (elemB.row or 1) == (elemA.row or 1) + 1 and abs((elemB.col or 0) - (elemA.col or 0)) <= 1 then
+							glVertex(elemA.targetPos[1], elemA.targetPos[2] + 8, elemA.targetPos[3])
+							glVertex(elemB.targetPos[1], elemB.targetPos[2] + 8, elemB.targetPos[3])
+						end
+					end
+				end
+			end)
+		else
+			glBeginEnd(GL_LINE_STRIP, function()
+				for i = 1, #elems do
+					local tp = elems[i].targetPos
+					glVertex(tp[1], tp[2] + 8, tp[3])
+				end
+			end)
+		end
 	end
 
 	glDepthTest(true)
@@ -1368,8 +1467,12 @@ function widget:DrawScreen()
 	local baseType = ""
 	if isSilo then
 		baseType = isWarn and "ICBM SILO (QUEUED)" or "ICBM NUCLEAR SALVO"
+	elseif activeBarragePreview.isArea then
+		baseType = "HEX BARRAGE (TOT)"
+	elseif activeBarragePreview.gridRows and activeBarragePreview.gridRows > 1 then
+		baseType = string.format("MULTI-ROW PHALANX (%d×%d GRID)", activeBarragePreview.gridCols, activeBarragePreview.gridRows)
 	else
-		baseType = activeBarragePreview.isArea and "HEX BARRAGE (TOT)" or "LINEAR CARPET (TOT)"
+		baseType = "LINEAR CARPET (TOT)"
 	end
 
 	local headerText = ""
