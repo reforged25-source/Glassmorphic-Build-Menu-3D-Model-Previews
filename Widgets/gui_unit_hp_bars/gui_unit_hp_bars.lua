@@ -323,8 +323,6 @@ local function cacheUnitDefs()
 		local isHero = false
 		if unitDef.customParams and (unitDef.customParams.iscommander or unitDef.customParams.commander or unitDef.customParams.hero) then
 			isHero = true
-		elseif unitDef.isCommander == true then
-			isHero = true
 		elseif unitDef.name then
 			local n = unitDef.name:lower()
 			if n:find("armcom") or n:find("corcom") or n:find("legcom") or n:find("commander") or n:find("herocom") then

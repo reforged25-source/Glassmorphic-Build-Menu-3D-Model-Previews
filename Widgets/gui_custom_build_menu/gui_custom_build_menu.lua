@@ -205,7 +205,7 @@ local function getMyCommanderUnitID()
 		local uID = candidateUnits[i]
 		local uDefID = spGetUnitDefID and spGetUnitDefID(uID)
 		local uDef = uDefID and UnitDefs[uDefID]
-		if uDef and (uDef.isCommander or (uDef.customParams and uDef.customParams.iscommander) or (uDef.name and (uDef.name:find("com") or uDef.name:find("commander")))) then
+		if uDef and ((uDef.customParams and uDef.customParams.iscommander) or (uDef.name and (uDef.name:find("com") or uDef.name:find("commander")))) then
 			return uID, uDefID
 		end
 	end
@@ -1040,10 +1040,19 @@ local suppressedStock = {}
 
 local function disableStockBuildWidgets()
 	if not widgetHandler or not widgetHandler.knownWidgets then return end
+	local myName = (widget.GetInfo and widget:GetInfo().name) or "Build Menu 2.0"
+	local myCompactName = lower(tostring(myName)):gsub("[%s_%-%.]", "")
+	local didDisable = false
 	for name, known in pairs(widgetHandler.knownWidgets) do
 		local displayName = (known and known.name) or name
-		local compactName = lower(tostring(displayName)):gsub("[%s_%-]", "")
-		local isThisWidget = compactName == "custombuildmenu"
+		local compactName = lower(tostring(displayName)):gsub("[%s_%-%.]", "")
+		local isThisWidget = (name == myName)
+			or (displayName == myName)
+			or (known and (known.name == myName or known.widget == widget))
+			or compactName == "custombuildmenu"
+			or compactName == myCompactName
+			or compactName == "buildmenu20"
+			or compactName:find("buildmenu2", 1, true) ~= nil
 		local isStockBuildMenu = not isThisWidget and (
 			compactName == "gridmenu"
 			or compactName == "gridbuildmenu"
@@ -1056,17 +1065,21 @@ local function disableStockBuildWidgets()
 		if isStockBuildMenu and known.active and not suppressedStock[name] then
 			widgetHandler:DisableWidget(name)
 			suppressedStock[name] = true
+			didDisable = true
 		end
 	end
-	-- Because Grid menu / Build menu sets WG.buildmenu = nil on Shutdown,
-	-- re-assign our WG.buildmenu bridge immediately so Order menu and Info widget never crash!
-	installBuildmenuBridge()
+	if didDisable then
+		installBuildmenuBridge()
+	end
 end
 
 local function restoreStockBuildWidgets()
 	if not widgetHandler then return end
+	local myName = (widget.GetInfo and widget:GetInfo().name) or "Build Menu 2.0"
 	for name in pairs(suppressedStock) do
-		if widgetHandler.EnableWidget then widgetHandler:EnableWidget(name) end
+		if name ~= myName and widgetHandler.EnableWidget then
+			widgetHandler:EnableWidget(name)
+		end
 	end
 	suppressedStock = {}
 end
