@@ -21,30 +21,22 @@ local spGetUnitDefID           = Spring.GetUnitDefID
 local spGetUnitPosition        = Spring.GetUnitPosition
 local spGetUnitHeading         = Spring.GetUnitHeading
 local spGetGroundHeight        = Spring.GetGroundHeight
-local spGetGroundNormal        = Spring.GetGroundNormal
 local spTraceScreenRay         = Spring.TraceScreenRay
 local spGetActiveCommand       = Spring.GetActiveCommand
 local spSetActiveCommand       = Spring.SetActiveCommand
 local spGiveOrderToUnit        = Spring.GiveOrderToUnit
 local spGetGameFrame           = Spring.GetGameFrame
 local spGetGameSeconds         = Spring.GetGameSeconds
-local spGetCameraPosition      = Spring.GetCameraPosition
 local spGetViewGeometry        = Spring.GetViewGeometry
 local spGetModKeyState         = Spring.GetModKeyState
 local spPlaySoundFile          = Spring.PlaySoundFile
-local spWorldToScreenCoords    = Spring.WorldToScreenCoords
+local spIsGUIHidden            = Spring.IsGUIHidden
 
 local glColor                  = gl.Color
 local glLineWidth              = gl.LineWidth
 local glBeginEnd               = gl.BeginEnd
 local glVertex                 = gl.Vertex
-local glPushMatrix             = gl.PushMatrix
-local glPopMatrix              = gl.PopMatrix
-local glTranslate              = gl.Translate
-local glRotate                 = gl.Rotate
-local glScale                  = gl.Scale
 local glDepthTest              = gl.DepthTest
-local glPolygonMode            = gl.PolygonMode
 local glText                   = gl.Text
 local glRect                   = gl.Rect
 
@@ -71,26 +63,47 @@ local SPRING_HEADING_SCALE     = (2 * math.pi) / 65536
 --------------------------------------------------------------------------------
 local CMD_ATTACK               = CMD.ATTACK or 16
 local CMD_SET_TARGET           = (CMD and CMD.SET_TARGET) or 34923
+local CMD_MANUALFIRE           = (CMD and CMD.MANUALFIRE) or 20 -- D-Gun & Nuke Launch
 local CMD_STOCKPILE            = (CMD and CMD.STOCKPILE) or 100
-local CMD_WAIT                 = CMD.WAIT or 25
-local CMD_FIRE_STATE           = CMD.FIRE_STATE or 45
 
-local DRAG_DIST_THRESHOLD      = 45 -- World elmos before engaging carpet barrage
+local DRAG_PIXEL_THRESHOLD     = 10 -- Minimum mouse drag distance in screen pixels
 local GRAVITY_CONSTANT         = 130.0 -- Spring engine standard gravity magnitude
 
 --------------------------------------------------------------------------------
 -- STATE VARIABLES
 --------------------------------------------------------------------------------
 local isDragging               = false
+local dragStartScreen          = { x = 0, y = 0 }
 local dragStartWorld           = nil
 local dragCurrentWorld         = nil
 local dragCommandID            = CMD_ATTACK
+local dragTargetUnitID         = nil
+local dragShiftHeld            = false
+local hasDraggedPastThreshold  = false
 local isAreaMode               = false
-local isAltRightDrag           = false
 
 local activeBarragePreview     = nil
 local pendingSalvos            = {} -- Queue of scheduled TOT fire events
 local unitWeaponCache          = {}
+
+--------------------------------------------------------------------------------
+-- COMMAND MATCHER
+--------------------------------------------------------------------------------
+local function IsCarpetCommand(cmdID, cmdName)
+	if not cmdID or cmdID == 0 then return false end
+	if cmdID == CMD_ATTACK or cmdID == 16 then return true end
+	if cmdID == CMD_SET_TARGET or cmdID == 34923 then return true end
+	if cmdID == CMD_MANUALFIRE or cmdID == 20 then return true end
+	if cmdID == CMD_STOCKPILE or cmdID == 100 then return true end
+
+	if cmdName then
+		local s = string.lower(cmdName)
+		if s:find("attack") or s:find("target") or s:find("launch") or s:find("fire") then
+			return true
+		end
+	end
+	return false
+end
 
 --------------------------------------------------------------------------------
 -- WEAPON & BALLISTICS ENGINE
@@ -106,22 +119,29 @@ local function GetUnitWeaponInfo(unitDefID)
 		return false
 	end
 
-	-- Scan weapons to find the primary long-range ballistic / rocket / plasma weapon
 	local bestWeapon = nil
 	local maxRange = 0
 
+	-- Scan all weapons; accept any offensive ground-capable weapon with range >= 150
 	for i = 1, #udef.weapons do
 		local w = udef.weapons[i]
 		if w and w.weaponDef then
 			local wdef = WeaponDefs[w.weaponDef]
 			if wdef and wdef.range and wdef.range > maxRange then
-				-- Filter out AA-only or shield-only weapons
-				local isAA = wdef.onlyTargets and wdef.onlyTargets.air
-				if not isAA and wdef.range >= 350 then
+				local isAAOnly = wdef.onlyTargets and (wdef.onlyTargets.air == true or wdef.onlyTargets.vtol == true) and not wdef.onlyTargets.ground
+				if not isAAOnly and wdef.range >= 150 and not wdef.isShield then
 					maxRange = wdef.range
 					bestWeapon = wdef
 				end
 			end
+		end
+	end
+
+	-- Fallback to first weapon if no long-range weapon found
+	if not bestWeapon and udef.weapons[1] and udef.weapons[1].weaponDef then
+		local wdef = WeaponDefs[udef.weapons[1].weaponDef]
+		if wdef and not wdef.isShield then
+			bestWeapon = wdef
 		end
 	end
 
@@ -131,10 +151,10 @@ local function GetUnitWeaponInfo(unitDefID)
 	end
 
 	local info = {
-		name         = bestWeapon.name or "Artillery",
-		range        = bestWeapon.range or 800,
+		name         = bestWeapon.name or "Cannon",
+		range        = bestWeapon.range or 500,
 		minRange     = bestWeapon.minRange or 0,
-		aoe          = max(32, bestWeapon.damageAreaOfEffect or 48),
+		aoe          = max(24, bestWeapon.damageAreaOfEffect or 32),
 		projSpeed    = max(100, bestWeapon.projectilespeed or 350),
 		isBallistic  = (bestWeapon.type == "Cannon" or bestWeapon.type == "MissileLauncher"),
 		highTraj     = bestWeapon.trajectoryHeight and (bestWeapon.trajectoryHeight > 0),
@@ -164,14 +184,12 @@ local function SolveFlightTime(dx, dy, dz, projSpeed, isBallistic, highTraj)
 	local discriminant = v4 - g * (g * horizDist * horizDist + 2 * dy * v2)
 
 	if discriminant < 0 then
-		-- Target out of pure ballistic range, fallback to direct velocity
 		local totalDist = sqrt(horizDist * horizDist + dy * dy)
 		return max(0.1, totalDist / v)
 	end
 
 	local sqrtDisc = sqrt(discriminant)
 	local root = highTraj and (v2 + sqrtDisc) or (v2 - sqrtDisc)
-	local tanTheta = root / (g * horizDist)
 	local theta = atan2(root, g * horizDist)
 	local cosTheta = cos(theta)
 
@@ -194,9 +212,30 @@ local function SolveTurretSlewTime(unitX, unitZ, unitHeadingSpring, targetX, tar
 end
 
 --------------------------------------------------------------------------------
+-- GROUND RAYCAST HELPER
+--------------------------------------------------------------------------------
+local function GetGroundPosFromMouse(mx, my)
+	local traceType, pos = spTraceScreenRay(mx, my, false, false, false)
+	local targetID = nil
+	if traceType == "unit" and pos then
+		targetID = pos
+		local ux, uy, uz = spGetUnitPosition(targetID)
+		if ux then
+			return { ux, uy, uz }, targetID
+		end
+	end
+
+	local _, gpos = spTraceScreenRay(mx, my, true, false, false)
+	if gpos then
+		return gpos, nil
+	end
+	return nil, nil
+end
+
+--------------------------------------------------------------------------------
 -- SPATIAL TESSELLATION & PACKING (HEXAGONAL & LINEAR)
 --------------------------------------------------------------------------------
-local function GenerateLinearTessellation(pStart, pEnd, count, avgAoE)
+local function GenerateLinearTessellation(pStart, pEnd, count)
 	local points = {}
 	if count <= 0 then return points end
 
@@ -247,7 +286,7 @@ local function GenerateHexagonalTessellation(center, radius, count, avgAoE)
 			points[#points + 1] = { tx, ty, tz }
 		end
 		ring = ring + 1
-		if ring > 10 then break end -- Safety cap
+		if ring > 12 then break end
 	end
 
 	return points
@@ -279,7 +318,7 @@ local function MatchUnitsToTargetsZeroCrisscross(units, targets, dirVector)
 		decoratedTargets[j] = { target = t, proj = proj }
 	end
 
-	-- 3. Sort both sets strictly along the projection axis
+	-- 3. Sort both sets strictly along projection axis
 	table.sort(decoratedUnits, function(a, b) return a.proj < b.proj end)
 	table.sort(decoratedTargets, function(a, b) return a.proj < b.proj end)
 
@@ -302,7 +341,7 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 	local rawSelected = spGetSelectedUnits()
 	if not rawSelected or #rawSelected < 2 then return nil end
 
-	-- 1. Filter valid artillery/combat units
+	-- 1. Filter valid combat units
 	local validUnits = {}
 	local totalAoE = 0
 
@@ -341,7 +380,7 @@ local function BuildCarpetBarragePlan(cmdID, pStart, pEnd, isArea)
 		dirX = dx
 		dirZ = dz
 	else
-		targets = GenerateLinearTessellation(pStart, pEnd, numUnits, avgAoE)
+		targets = GenerateLinearTessellation(pStart, pEnd, numUnits)
 		dirX = pEnd[1] - pStart[1]
 		dirZ = pEnd[3] - pStart[3]
 	end
@@ -413,23 +452,23 @@ end
 --------------------------------------------------------------------------------
 -- DISPATCHER & TOT QUEUE HANDLER
 --------------------------------------------------------------------------------
-local function ExecuteCarpetBarrage(plan)
+local function ExecuteCarpetBarrage(plan, shiftHeld)
 	if not plan or not plan.elements then return end
 
 	local currentFrame = spGetGameFrame()
+	local options = shiftHeld and { "shift" } or {}
 	local pending = {}
 
 	for i = 1, #plan.elements do
 		local elem = plan.elements[i]
 		if elem.fireFrame <= currentFrame then
-			-- Fire immediately on this frame
-			spGiveOrderToUnit(elem.unitID, plan.commandID, elem.targetPos, {})
+			spGiveOrderToUnit(elem.unitID, plan.commandID, elem.targetPos, options)
 		else
-			-- Queue for sub-tick synchronized release
 			pending[#pending + 1] = {
 				unitID    = elem.unitID,
 				cmdID     = plan.commandID,
 				targetPos = elem.targetPos,
+				options   = options,
 				fireFrame = elem.fireFrame,
 			}
 		end
@@ -439,7 +478,7 @@ local function ExecuteCarpetBarrage(plan)
 		pendingSalvos[#pendingSalvos + 1] = pending
 	end
 
-	spPlaySoundFile("sounds/ui/build_done.wav", 1.0, nil, nil, nil, "ui")
+	pcall(spPlaySoundFile, "beep4", 0.70, "ui")
 end
 
 function widget:GameFrame(frame)
@@ -454,7 +493,7 @@ function widget:GameFrame(frame)
 			local item = salvo[k]
 			if item and not item.dispatched then
 				if frame >= item.fireFrame then
-					spGiveOrderToUnit(item.unitID, item.cmdID, item.targetPos, {})
+					spGiveOrderToUnit(item.unitID, item.cmdID, item.targetPos, item.options or {})
 					item.dispatched = true
 				else
 					allDispatched = false
@@ -471,53 +510,56 @@ function widget:GameFrame(frame)
 end
 
 --------------------------------------------------------------------------------
--- RAYCAST GROUND HELPER
---------------------------------------------------------------------------------
-local function ScreenToGround(mx, my)
-	local _, pos = spTraceScreenRay(mx, my, true, true)
-	if pos then
-		return pos
-	end
-	return nil
-end
-
---------------------------------------------------------------------------------
 -- MOUSE & COMMAND HOOKS ("กดที่ปุ่มเดิมเลย")
 --------------------------------------------------------------------------------
 function widget:MousePress(mx, my, button)
+	if spIsGUIHidden and spIsGUIHidden() then return false end
+
 	local alt, ctrl, meta, shift = spGetModKeyState()
 
 	-- Alt + Right-Click Drag shortcut
 	if button == 3 and alt then
-		local gpos = ScreenToGround(mx, my)
-		if gpos then
-			isDragging = true
-			isAltRightDrag = true
-			dragCommandID = CMD_ATTACK
-			dragStartWorld = gpos
-			dragCurrentWorld = gpos
-			isAreaMode = ctrl
-			activeBarragePreview = nil
-			return true
+		local sel = spGetSelectedUnits()
+		if sel and #sel >= 2 then
+			local gpos, tid = GetGroundPosFromMouse(mx, my)
+			if gpos then
+				isDragging = true
+				hasDraggedPastThreshold = false
+				dragStartScreen.x = mx
+				dragStartScreen.y = my
+				dragCommandID = CMD_ATTACK
+				dragStartWorld = gpos
+				dragCurrentWorld = gpos
+				dragTargetUnitID = tid
+				dragShiftHeld = shift
+				isAreaMode = ctrl
+				activeBarragePreview = nil
+				return true
+			end
 		end
 	end
 
-	-- Intercepting Active In-Game Command (Attack, Set Target, Launch)
+	-- Intercepting Active In-Game Command (Attack, Set Target, Launch, etc.)
 	if button == 1 then
-		local _, activeCmdID = spGetActiveCommand()
-		if activeCmdID == CMD_ATTACK or activeCmdID == CMD_SET_TARGET or activeCmdID == CMD_STOCKPILE then
+		local _, activeCmdID, _, activeCmdName = spGetActiveCommand()
+		if IsCarpetCommand(activeCmdID, activeCmdName) then
 			local sel = spGetSelectedUnits()
 			if sel and #sel >= 2 then
-				local gpos = ScreenToGround(mx, my)
+				local gpos, tid = GetGroundPosFromMouse(mx, my)
 				if gpos then
 					isDragging = true
-					isAltRightDrag = false
-					dragCommandID = activeCmdID
+					hasDraggedPastThreshold = false
+					dragStartScreen.x = mx
+					dragStartScreen.y = my
+					dragCommandID = (activeCmdID and activeCmdID > 0) and activeCmdID or CMD_ATTACK
 					dragStartWorld = gpos
 					dragCurrentWorld = gpos
+					dragTargetUnitID = tid
+					dragShiftHeld = shift
 					isAreaMode = ctrl
 					activeBarragePreview = nil
-					-- Don't consume yet; allow short click to fallback naturally
+					-- Capture mouse event so engine doesn't fire immediately
+					return true
 				end
 			end
 		end
@@ -529,44 +571,64 @@ end
 function widget:MouseMove(mx, my, dx, dy, button)
 	if not isDragging or not dragStartWorld then return false end
 
-	local gpos = ScreenToGround(mx, my)
+	local gpos = GetGroundPosFromMouse(mx, my)
 	if gpos then
 		dragCurrentWorld = gpos
-		local _, ctrl = spGetModKeyState()
+		local _, ctrl, _, shift = spGetModKeyState()
 		isAreaMode = ctrl
+		dragShiftHeld = shift
 
-		local dX = dragCurrentWorld[1] - dragStartWorld[1]
-		local dZ = dragCurrentWorld[3] - dragStartWorld[3]
-		local dist = sqrt(dX * dX + dZ * dZ)
-
-		if dist >= DRAG_DIST_THRESHOLD then
+		local sDist = sqrt((mx - dragStartScreen.x)^2 + (my - dragStartScreen.y)^2)
+		if sDist >= DRAG_PIXEL_THRESHOLD then
+			hasDraggedPastThreshold = true
 			activeBarragePreview = BuildCarpetBarragePlan(dragCommandID, dragStartWorld, dragCurrentWorld, isAreaMode)
 		else
 			activeBarragePreview = nil
 		end
 	end
 
-	return false
+	return true
 end
 
 function widget:MouseRelease(mx, my, button)
 	if not isDragging then return false end
 
-	local handled = false
-	if activeBarragePreview and activeBarragePreview.totalUnits >= 2 then
-		ExecuteCarpetBarrage(activeBarragePreview)
-		-- Consume active command so standard single attack doesn't duplicate
+	local _, _, _, shift = spGetModKeyState()
+	dragShiftHeld = shift or dragShiftHeld
+
+	if hasDraggedPastThreshold and activeBarragePreview and activeBarragePreview.totalUnits >= 2 then
+		-- 1. Executed Dragged Carpet Barrage!
+		ExecuteCarpetBarrage(activeBarragePreview, dragShiftHeld)
 		spSetActiveCommand(0)
-		handled = true
+	else
+		-- 2. It was a single click without dragging: pass through normal command smoothly!
+		local sel = spGetSelectedUnits()
+		if sel and #sel > 0 then
+			local options = dragShiftHeld and { "shift" } or {}
+			local targetParams = nil
+			if dragTargetUnitID then
+				targetParams = { dragTargetUnitID }
+			elseif dragStartWorld then
+				targetParams = dragStartWorld
+			end
+
+			if targetParams then
+				for i = 1, #sel do
+					spGiveOrderToUnit(sel[i], dragCommandID, targetParams, options)
+				end
+			end
+		end
+		spSetActiveCommand(0)
 	end
 
 	isDragging = false
 	dragStartWorld = nil
 	dragCurrentWorld = nil
 	activeBarragePreview = nil
-	isAltRightDrag = false
+	hasDraggedPastThreshold = false
+	dragTargetUnitID = nil
 
-	return handled
+	return true
 end
 
 --------------------------------------------------------------------------------
@@ -576,26 +638,26 @@ local function DrawGroundRing(cx, cy, cz, radius, r, g, b, a)
 	local segments = 32
 	local step = TWO_PI / segments
 
-	glColor(r, g, b, a * 0.2)
+	glColor(r, g, b, a * 0.22)
 	glBeginEnd(GL_TRIANGLE_FAN, function()
-		glVertex(cx, cy + 2, cz)
+		glVertex(cx, cy + 3, cz)
 		for i = 0, segments do
 			local angle = i * step
 			local px = cx + cos(angle) * radius
 			local pz = cz + sin(angle) * radius
-			local py = spGetGroundHeight(px, pz) + 2
+			local py = spGetGroundHeight(px, pz) + 3
 			glVertex(px, py, pz)
 		end
 	end)
 
 	glColor(r, g, b, a)
-	glLineWidth(2.0)
+	glLineWidth(2.2)
 	glBeginEnd(GL_LINE_LOOP, function()
 		for i = 0, segments - 1 do
 			local angle = i * step
 			local px = cx + cos(angle) * radius
 			local pz = cz + sin(angle) * radius
-			local py = spGetGroundHeight(px, pz) + 3
+			local py = spGetGroundHeight(px, pz) + 4
 			glVertex(px, py, pz)
 		end
 	end)
@@ -609,7 +671,7 @@ local function DrawParabolicLaserArc(pStart, pEnd, r, g, b, a)
 	local dist = sqrt(dx * dx + dz * dz)
 	local arcHeight = max(60, dist * 0.25)
 
-	glLineWidth(1.8)
+	glLineWidth(2.0)
 	glBeginEnd(GL_LINE_STRIP, function()
 		for i = 0, segments do
 			local t = i / segments
@@ -638,12 +700,12 @@ function widget:DrawWorld()
 		local up = elem.unitPos
 
 		-- 1. Holographic Impact Zone
-		DrawGroundRing(tp[1], tp[2], tp[3], elem.aoe, 0.2, 0.9, 1.0, 0.85 * pulse)
+		DrawGroundRing(tp[1], tp[2], tp[3], elem.aoe, 0.2, 0.95, 1.0, 0.85 * pulse)
 
 		-- 2. Inner Crosshair
-		local chSize = elem.aoe * 0.4
-		glColor(0.3, 1.0, 0.9, 0.7 * pulse)
-		glLineWidth(1.5)
+		local chSize = elem.aoe * 0.45
+		glColor(0.35, 1.0, 0.95, 0.75 * pulse)
+		glLineWidth(1.8)
 		glBeginEnd(GL_LINES, function()
 			glVertex(tp[1] - chSize, tp[2] + 4, tp[3])
 			glVertex(tp[1] + chSize, tp[2] + 4, tp[3])
@@ -652,17 +714,17 @@ function widget:DrawWorld()
 		end)
 
 		-- 3. Parabolic Trajectory Arc from Muzzle to Target
-		DrawParabolicLaserArc(up, tp, 0.1, 0.85, 1.0, 0.7)
+		DrawParabolicLaserArc(up, tp, 0.15, 0.85, 1.0, 0.75)
 	end
 
-	-- Connecting Barrage Boundary
+	-- Connecting Barrage Boundary Line
 	if #elems >= 2 then
-		glColor(0.2, 0.95, 1.0, 0.5)
-		glLineWidth(2.0)
+		glColor(0.2, 0.95, 1.0, 0.6)
+		glLineWidth(2.2)
 		glBeginEnd(GL_LINE_STRIP, function()
 			for i = 1, #elems do
 				local tp = elems[i].targetPos
-				glVertex(tp[1], tp[2] + 5, tp[3])
+				glVertex(tp[1], tp[2] + 6, tp[3])
 			end
 		end)
 	end
@@ -679,18 +741,18 @@ function widget:DrawScreen()
 	if not activeBarragePreview then return end
 
 	local vsx, vsy = spGetViewGeometry()
-	local hudW = 340
-	local hudH = 75
+	local hudW = 360
+	local hudH = 78
 	local hudX = (vsx - hudW) * 0.5
 	local hudY = vsy - 120
 
 	-- Backdrop Glass
-	glColor(0.02, 0.05, 0.09, 0.82)
+	glColor(0.015, 0.04, 0.08, 0.85)
 	glRect(hudX, hudY, hudX + hudW, hudY + hudH)
 
 	-- Glowing Cyan Border
-	glColor(0.18, 0.85, 1.0, 0.85)
-	glLineWidth(1.5)
+	glColor(0.2, 0.9, 1.0, 0.88)
+	glLineWidth(2.0)
 	glBeginEnd(GL_LINE_LOOP, function()
 		glVertex(hudX, hudY)
 		glVertex(hudX + hudW, hudY)
@@ -700,16 +762,17 @@ function widget:DrawScreen()
 
 	-- Header Title
 	local title = activeBarragePreview.isArea and "HEXAGONAL CARPET BARRAGE (TOT)" or "LINEAR CARPET BARRAGE (TOT)"
-	glText(title, hudX + 16, hudY + 48, 13, "o")
+	glColor(0.25, 0.95, 1.0, 1.0)
+	glText(title, hudX + 16, hudY + 50, 13, "o")
 
 	-- Detailed Salvo Info
 	local infoText = string.format("UNITS SYNCED: %d  |  TOT IMPACT: %.1fs", activeBarragePreview.totalUnits, activeBarragePreview.maxReadyTime)
-	glColor(0.7, 0.92, 1.0, 0.9)
-	glText(infoText, hudX + 16, hudY + 28, 11, "o")
+	glColor(0.75, 0.95, 1.0, 0.95)
+	glText(infoText, hudX + 16, hudY + 30, 11, "o")
 
-	local hintText = "Release to fire volley  |  Hold Ctrl for Area Hex-Grid"
-	glColor(0.5, 0.75, 0.9, 0.7)
-	glText(hintText, hudX + 16, hudY + 12, 9, "o")
+	local hintText = "Release to fire salvo  |  Hold Ctrl for Hex-Grid"
+	glColor(0.55, 0.8, 0.95, 0.75)
+	glText(hintText, hudX + 16, hudY + 12, 10, "o")
 
 	glColor(1, 1, 1, 1)
 end
@@ -721,4 +784,5 @@ function widget:Shutdown()
 	pendingSalvos = {}
 	activeBarragePreview = nil
 	unitWeaponCache = {}
+	isDragging = false
 end
