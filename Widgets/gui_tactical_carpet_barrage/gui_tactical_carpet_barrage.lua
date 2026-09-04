@@ -2,10 +2,11 @@ local widget = widget ---@type Widget
 
 function widget:GetInfo()
 	return {
-		name = "Tactical Carpet Barrage & TOT",
-		desc = "AAA-grade Synchronized Time-On-Target (TOT) and non-overlapping carpet bombardment for artillery, rockets, and missile silos with real-time damage tier color telemetry and out-of-range visual alerts.",
+		name = "Carpet Barrage 2.0",
+		desc = "AAA-grade Synchronized Time-On-Target (TOT) and non-overlapping carpet bombardment for artillery, rockets, and missile silos with real-time damage tier color telemetry and out-of-range visual alerts. (v2.0 by reforged25-source)",
 		author = "reforged25-source / Codex",
-		date = "2026",
+		version = "2.0",
+		date = "2026 (v2.0)",
 		license = "GNU GPL, v2 or later",
 		layer = 0,
 		enabled = true,

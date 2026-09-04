@@ -1,10 +1,10 @@
 {
 	"id": "gui_tactical_carpet_barrage",
-	"version": "1.0.0",
-	"display_name": "Tactical Carpet Barrage & TOT",
+	"version": "2.0.0",
+	"display_name": "Carpet Barrage 2.0",
 	"author": "reforged25-source / Codex",
 	"discord_link": "",
 	"github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_tactical_carpet_barrage",
-	"description": "Synchronized Time-On-Target (TOT) non-overlapping carpet bombardment for artillery, rockets, and missile silos. Click and drag using standard Attack, Set Target, or Launch buttons to unleash perfectly coordinated salvos.",
-	"last_updated": "2026-09-04T18:30:00.000Z"
+	"description": "AAA-grade Synchronized Time-On-Target (TOT) non-overlapping carpet bombardment for artillery, rockets, and missile silos with damage tier color hierarchy and out-of-range visual alerts.",
+	"last_updated": "2026-09-04T19:00:00.000Z"
 }

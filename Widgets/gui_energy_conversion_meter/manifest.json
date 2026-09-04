@@ -1,10 +1,10 @@
 {
 	"id": "gui_energy_conversion_meter",
-	"version": "1.2.0",
-	"display_name": "Energy Conversion Meter",
-	"author": "Egzothicki",
+	"version": "2.0.0",
+	"display_name": "Energy Meter 2.0",
+	"author": "reforged25-source / Codex (orig: Egzothicki)",
 	"discord_link": "https://discord.com/channels/549281623154229250/1532349057287061604",
-	"github_link": "https://github.com/beyond-all-reason/BAR-Widgets/tree/main/Widgets/community/gui_energy_conversion_meter",
+	"github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_energy_conversion_meter",
 	"description": "Draggable 9-bar meter showing your current imbalance in energy production and energy conversion. It alerts you and makes it stupid simple to know when you're Overflowing vs when you have Idle converters. Severity relative to income, construction-aware both for units and buildings. Styled to match the top bar, with magnet snapping to grid and nearby UI when dragged.",
-	"last_updated": "2026-08-04T12:00:00.000Z"
+	"last_updated": "2026-09-04T19:00:00.000Z"
 }

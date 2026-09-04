@@ -1,6 +1,9 @@
-# Custom Build Menu (Glassmorphic Build Menu & 3D Model Previews)
+# Build Menu 2.0 (Glassmorphic Build Menu & 3D Model Previews)
 
-![Custom Build Menu Preview](gui_custom_build_menu.png)
+**Developer:** reforged25-source / Codex  
+**Version:** 2.0  
+
+![Build Menu 2.0 Preview](gui_custom_build_menu.png)
 
 Replaces the stock build menu with a sleek translucent cyber-glass interface organized into four hotkey-accessible categories: **Economy (Z)**, **Combat (X)**, **Utility (C)**, and **Build (V)**.
 

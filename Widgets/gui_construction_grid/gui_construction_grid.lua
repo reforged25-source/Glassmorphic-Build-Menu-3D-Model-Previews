@@ -2,10 +2,11 @@ local widget = widget ---@type Widget
 
 function widget:GetInfo()
 	return {
-		name = "Construction Base Grid",
-		desc = "Orange ground footprints for all finished units & structures with white rounded placement grid, active only in build mode.",
-		author = "Codex",
-		date = "2026-08-21",
+		name = "Build Grid 2.0",
+		desc = "Orange ground footprints for all finished units & structures with white rounded placement grid, active only in build mode. (v2.0 by reforged25-source)",
+		author = "reforged25-source / Codex",
+		version = "2.0",
+		date = "2026 (v2.0)",
 		license = "GNU GPL, v2 or later",
 		layer = 180,
 		enabled = true,
@@ -562,7 +563,7 @@ function M.initializeGridGL4()
 			gridRadius = CONST.GRID_RADIUS,
 			baseAlpha = 0.96,
 		},
-	}, "Construction Base Grid")
+	}, "Build Grid 2.0")
 	if not State.gridShader or not State.gridShader:Initialize() then
 		State.gridShader = nil
 		return false
@@ -1565,7 +1566,7 @@ function widget:Initialize()
 	local coloredFillGPU = M.initializeFillGL4()
 	if not coloredFillGPU then M.freeFillGL4() end
 	M.rebuildQueuedBuilds()
-	Spring.Echo("[Construction Base Grid] ready (white "
+	Spring.Echo("[Build Grid 2.0] ready (white "
 		.. (whiteGridGPU and "GPU" or "CPU") .. ", fills "
 		.. (coloredFillGPU and "GPU" or "CPU") .. ")")
 end
@@ -1575,7 +1576,7 @@ function widget:TextCommand(command)
 	if command == "constructiongrid" or command == "constructiongrid toggle" then
 		State.enabled = not State.enabled
 		if State.enabled then State.queueRefreshPending = true end
-		Spring.Echo("[Construction Base Grid] " .. (State.enabled and "enabled" or "disabled"))
+		Spring.Echo("[Build Grid 2.0] " .. (State.enabled and "enabled" or "disabled"))
 	end
 end
 

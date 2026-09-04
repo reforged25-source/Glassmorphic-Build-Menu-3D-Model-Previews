@@ -1,10 +1,10 @@
 {
 	"id": "gui_default_high_priority",
-	"version": "1.0.0",
-	"display_name": "Default High Priority",
-	"author": "Codex",
+	"version": "2.0.0",
+	"display_name": "High Priority 2.0",
+	"author": "reforged25-source / Codex",
 	"discord_link": "",
-	"github_link": "",
+	"github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_default_high_priority",
 	"description": "Automatically sets all newly created and finished builders, factories, and nano turrets to High Priority by default.",
-	"last_updated": "2026-08-22T19:44:00.000Z"
+	"last_updated": "2026-09-04T19:00:00.000Z"
 }

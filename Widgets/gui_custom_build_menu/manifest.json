@@ -1,9 +1,10 @@
 {
 	"id": "gui_custom_build_menu",
-	"display_name": "Custom Build Menu",
-	"author": "Codex",
+	"version": "2.0.0",
+	"display_name": "Build Menu 2.0",
+	"author": "reforged25-source / Codex",
 	"discord_link": "",
-	"github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews",
+	"github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_custom_build_menu",
 	"description": "A translucent four-category construction and factory purchase menu with rotating 3D unit previews and categorized tabs.",
-	"last_updated": "2026-08-22T00:00:00.000Z"
+	"last_updated": "2026-09-04T19:00:00.000Z"
 }

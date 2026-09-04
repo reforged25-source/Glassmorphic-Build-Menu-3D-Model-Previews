@@ -1,4 +1,7 @@
-# Tactical Carpet Barrage & Time-on-Target (TOT)
+# Carpet Barrage 2.0 (Tactical Carpet Barrage & TOT)
+
+**Developer:** reforged25-source / Codex  
+**Version:** 2.0  
 
 A military-grade tactical bombardment widget for **Beyond All Reason (BAR)**. It transforms the standard `Attack`, `Set Target`, and `Launch` commands into a synchronized, non-overlapping carpet barrage system.
 

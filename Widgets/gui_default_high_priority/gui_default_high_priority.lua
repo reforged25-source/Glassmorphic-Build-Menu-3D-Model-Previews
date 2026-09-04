@@ -2,10 +2,11 @@ local widget = widget ---@type Widget
 
 function widget:GetInfo()
 	return {
-		name = "Default High Priority",
-		desc = "Automatically defaults new Construction Turrets (Nano Turrets), Factories, and Builders to High Priority without overriding player choices.",
-		author = "Codex (refactored for AAA performance)",
-		date = "2026.09",
+		name = "High Priority 2.0",
+		desc = "Automatically defaults new Construction Turrets (Nano Turrets), Factories, and Builders to High Priority without overriding player choices. (v2.0 by reforged25-source)",
+		author = "reforged25-source / Codex",
+		version = "2.0",
+		date = "2026 (v2.0)",
 		license = "GNU GPL, v2 or later",
 		layer = 50,
 		enabled = true,

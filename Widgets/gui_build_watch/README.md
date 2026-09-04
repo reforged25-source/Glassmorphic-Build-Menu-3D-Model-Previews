@@ -1,13 +1,14 @@
-# Build Watch (ETA Time UI for both building and units)
+# Build Watch 2.0
 
-Features:
-• ETA GUI for factories/units and placed buildings
-• Flashing Red Decay Timer
-• Lower middle of screen 
-• Separated units from buildings
-• Click icon to move camera to where the item is being crafted
+**Developer:** reforged25-source / Codex (orig: 2Bit)  
+**Version:** 2.0  
+**License:** GNU GPL, v2 or later  
 
-Planned:
-• Plan on added keybindings for hiding the UI
-• Plan on making a config file to easily change icon/font size
-• Plan on giving an option to move the GUI around or at least adjusting its anchor point 
+Displays organized icons for all units under construction, showing build progress and estimated completion times with event-driven zero-polling performance.
+
+### Features:
+• ETA GUI for factories/units and placed buildings  
+• Flashing Red Decay Timer  
+• Lower middle of screen  
+• Separated units from buildings  
+• Click icon to move camera to where the item is being crafted  

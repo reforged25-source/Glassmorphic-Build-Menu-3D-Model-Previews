@@ -1,9 +1,10 @@
 {
 	"id": "gui_construction_grid",
-	"display_name": "Construction Base Grid",
-	"author": "Codex",
+	"version": "2.0.0",
+	"display_name": "Build Grid 2.0",
+	"author": "reforged25-source / Codex",
 	"discord_link": "",
-	"github_link": "",
+	"github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_construction_grid",
 	"description": "Orange ground footprints for all finished units and structures with white rounded placement grid, active only in build mode.",
-	"last_updated": "2026-08-22T00:00:00.000Z"
+	"last_updated": "2026-09-04T19:00:00.000Z"
 }

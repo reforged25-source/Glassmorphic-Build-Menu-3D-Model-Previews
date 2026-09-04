@@ -2,10 +2,11 @@ local widget = widget ---@type Widget
 
 function widget:GetInfo()
 	return {
-		name = "Military Formation Move",
-		desc = "Tactical military formation movement (Box, Circle) with coherent lateral projection matching and zero-GC batched rendering.",
-		author = "Codex (refactored for AAA performance)",
-		date = "2026.09",
+		name = "Formation Move 2.0",
+		desc = "Tactical military formation movement (Box, Circle) with coherent lateral projection matching and zero-GC batched rendering. (v2.0 by reforged25-source)",
+		author = "reforged25-source / Codex",
+		version = "2.0",
+		date = "2026 (v2.0)",
 		license = "GNU GPL, v2 or later",
 		layer = 250,
 		enabled = true,
@@ -820,7 +821,7 @@ function widget:Initialize()
 		WG['options'].addOptions({
 			{
 				id = "military_formation__sound",
-				widgetname = "Military Formation Move",
+				widgetname = "Formation Move 2.0",
 				name = "Sound Feedback",
 				description = "Play tactical audio chimes when creating and dispatching formations.",
 				type = "bool",
@@ -829,7 +830,7 @@ function widget:Initialize()
 			},
 			{
 				id = "military_formation__lines",
-				widgetname = "Military Formation Move",
+				widgetname = "Formation Move 2.0",
 				name = "Connecting Path Lines",
 				description = "Draw tactical trajectory lines from units to their assigned formation slots.",
 				type = "bool",

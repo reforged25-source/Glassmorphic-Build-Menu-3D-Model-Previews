@@ -1,13 +1,63 @@
 [
   {
     "id": "gui_tactical_carpet_barrage",
-    "version": "1.0.0",
-    "display_name": "Tactical Carpet Barrage & TOT",
+    "version": "2.0.0",
+    "display_name": "Carpet Barrage 2.0",
     "author": "reforged25-source / Codex",
     "discord_link": "",
     "github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_tactical_carpet_barrage",
-    "description": "Synchronized Time-On-Target (TOT) non-overlapping carpet bombardment for artillery, rockets, and missile silos. Click and drag using standard Attack, Set Target, or Launch buttons to unleash perfectly coordinated salvos.",
-    "last_updated": "2026-09-04T18:30:00.000Z"
+    "description": "AAA-grade Synchronized Time-On-Target (TOT) non-overlapping carpet bombardment for artillery, rockets, and missile silos with damage tier color hierarchy and out-of-range visual alerts.",
+    "last_updated": "2026-09-04T19:00:00.000Z"
+  },
+  {
+    "id": "gui_custom_build_menu",
+    "version": "2.0.0",
+    "display_name": "Build Menu 2.0",
+    "author": "reforged25-source / Codex",
+    "discord_link": "",
+    "github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_custom_build_menu",
+    "description": "A translucent four-category construction and factory purchase menu with rotating 3D unit previews and categorized tabs.",
+    "last_updated": "2026-09-04T19:00:00.000Z"
+  },
+  {
+    "id": "gui_unit_hp_bars",
+    "version": "2.0.0",
+    "display_name": "HP Bars 2.0",
+    "author": "reforged25-source / Codex",
+    "discord_link": "",
+    "github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_unit_hp_bars",
+    "description": "Unified numeric unit readout with HP, status values, real-time movement speed, resource flows, build ETA, and floating RPG damage numbers.",
+    "last_updated": "2026-09-04T19:00:00.000Z"
+  },
+  {
+    "id": "gui_construction_grid",
+    "version": "2.0.0",
+    "display_name": "Build Grid 2.0",
+    "author": "reforged25-source / Codex",
+    "discord_link": "",
+    "github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_construction_grid",
+    "description": "Orange ground footprints for all finished units and structures with white rounded placement grid, active only in build mode.",
+    "last_updated": "2026-09-04T19:00:00.000Z"
+  },
+  {
+    "id": "gui_military_formation_move",
+    "version": "2.0.0",
+    "display_name": "Formation Move 2.0",
+    "author": "reforged25-source / Codex",
+    "discord_link": "",
+    "github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_military_formation_move",
+    "description": "Tactical Military Formation Move with directional heading: Middle Click or Middle+Right Click drag to position and aim formations (Line, Box, Wedge, Column, Circle).",
+    "last_updated": "2026-09-04T19:00:00.000Z"
+  },
+  {
+    "id": "gui_default_high_priority",
+    "version": "2.0.0",
+    "display_name": "High Priority 2.0",
+    "author": "reforged25-source / Codex",
+    "discord_link": "",
+    "github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_default_high_priority",
+    "description": "Automatically sets all newly created and finished builders, factories, and nano turrets to High Priority by default.",
+    "last_updated": "2026-09-04T19:00:00.000Z"
   },
   {
     "id": "gui_zombie_wreck_timers",
@@ -21,13 +71,13 @@
   },
   {
     "id": "gui_energy_conversion_meter",
-    "version": "1.2.0",
-    "display_name": "Energy Conversion Meter",
-    "author": "Egzothicki",
+    "version": "2.0.0",
+    "display_name": "Energy Meter 2.0",
+    "author": "reforged25-source / Codex (orig: Egzothicki)",
     "discord_link": "https://discord.com/channels/549281623154229250/1532349057287061604",
-    "github_link": "https://github.com/beyond-all-reason/BAR-Widgets/tree/main/Widgets/community/gui_energy_conversion_meter",
+    "github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_energy_conversion_meter",
     "description": "Draggable 9-bar meter showing your current imbalance in energy production and energy conversion. It alerts you and makes it stupid simple to know when you're Overflowing vs when you have Idle converters. Severity relative to income, construction-aware both for units and buildings. Styled to match the top bar, with magnet snapping to grid and nearby UI when dragged.",
-    "last_updated": "2026-08-04T12:00:00.000Z"
+    "last_updated": "2026-09-04T19:00:00.000Z"
   },
   {
     "id": "cmd_build_snap",
@@ -96,12 +146,13 @@
   },
   {
     "id": "gui_build_watch",
-    "display_name": "Build Watch",
-    "author": "2Bit",
+    "version": "2.0.0",
+    "display_name": "Build Watch 2.0",
+    "author": "reforged25-source / Codex (orig: 2Bit)",
     "discord_link": "https://discord.com/channels/549281623154229250/1380031981542445206",
-    "github_link": "",
-    "description": "ETA Time UI for both building and units",
-    "last_updated": "2026-07-12T00:00:00.000Z"
+    "github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_build_watch",
+    "description": "Displays organized icons for all units under construction, showing build progress and estimated completion times with event-driven zero-polling performance.",
+    "last_updated": "2026-09-04T19:00:00.000Z"
   },
   {
     "id": "gui_build_placement_cost",
@@ -321,12 +372,13 @@
   },
   {
     "id": "gui_top_bar_extra",
-    "display_name": "Top Bar Extra",
-    "author": "uBdead",
+    "version": "2.0.0",
+    "display_name": "Top Bar 2.0",
+    "author": "reforged25-source / Codex (orig: uBdead)",
     "discord_link": "https://discord.com/channels/549281623154229250/1406718438801543339",
-    "github_link": "https://github.com/WybrenKoelmans/BAR-Widgets/blob/main/gui_top_bar_extra/gui_top_bar_extra.lua",
-    "description": "Adds a more detailed resource display.",
-    "last_updated": "2025-10-05T20:06:23.000Z"
+    "github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_top_bar_extra",
+    "description": "Adds a more detailed resource display with continuous zero-allocation EMA telemetry.",
+    "last_updated": "2026-09-04T19:00:00.000Z"
   },
   {
     "id": "unit_lazy_reclaimers",

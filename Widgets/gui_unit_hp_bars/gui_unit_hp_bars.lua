@@ -2,10 +2,11 @@ local widget = widget ---@type Widget
 
 function widget:GetInfo()
 	return {
-		name = "Unit HP Bars",
-		desc = "Unified numeric unit readout with HP, status values, real-time movement speed, resource flows, build ETA, and floating RPG damage numbers.",
-		author = "Codex",
-		date = "2026",
+		name = "HP Bars 2.0",
+		desc = "Unified numeric unit readout with HP, status values, real-time movement speed, resource flows, build ETA, and floating RPG damage numbers. (v2.0 by reforged25-source)",
+		author = "reforged25-source / Codex",
+		version = "2.0",
+		date = "2026 (v2.0)",
 		license = "GNU GPL, v2 or later",
 		handler = true,
 		layer = -7,

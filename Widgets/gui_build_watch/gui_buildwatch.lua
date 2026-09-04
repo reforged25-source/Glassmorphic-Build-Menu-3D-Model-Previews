@@ -2,10 +2,11 @@ local widget = widget ---@type Widget
 
 function widget:GetInfo()
     return {
-        name = "BuildWatch",
-        desc = "Displays organized icons for all units under construction, showing build progress and estimated completion times with event-driven zero-polling performance.",
-        author = "2Bit (refactored for AAA performance)",
-        date = "2026.09",
+        name = "Build Watch 2.0",
+        desc = "Displays organized icons for all units under construction, showing build progress and estimated completion times with event-driven zero-polling performance. (v2.0 by reforged25-source)",
+        author = "reforged25-source / Codex (orig: 2Bit)",
+        version = "2.0",
+        date = "2026 (v2.0)",
         license = "GNU GPL, v2 or later",
         layer = 2,
         enabled = true,

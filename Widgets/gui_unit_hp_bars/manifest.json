@@ -1,9 +1,10 @@
 {
 	"id": "gui_unit_hp_bars",
-	"display_name": "Unit HP Bars",
-	"author": "Codex",
+	"version": "2.0.0",
+	"display_name": "HP Bars 2.0",
+	"author": "reforged25-source / Codex",
 	"discord_link": "",
-	"github_link": "",
+	"github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_unit_hp_bars",
 	"description": "Keeps stock bars and ETA overlays hidden; shows HP, real-time movement speed, per-second Metal/Energy flow, shield, capture, stockpile, EMP, reload, build, ETA, M/E, feature HP and reclaimable values as text.",
-	"last_updated": "2026-08-20T00:00:00.000Z"
+	"last_updated": "2026-09-04T19:00:00.000Z"
 }

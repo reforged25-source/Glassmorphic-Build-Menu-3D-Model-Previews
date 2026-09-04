@@ -1,9 +1,10 @@
 {
 	"id": "gui_military_formation_move",
-	"display_name": "Military Formation Move",
-	"author": "Codex",
+	"version": "2.0.0",
+	"display_name": "Formation Move 2.0",
+	"author": "reforged25-source / Codex",
 	"discord_link": "",
-	"github_link": "",
+	"github_link": "https://github.com/reforged25-source/Glassmorphic-Build-Menu-3D-Model-Previews/tree/main/Widgets/gui_military_formation_move",
 	"description": "Tactical Military Formation Move with directional heading: Middle Click or Middle+Right Click drag to position and aim formations (Line, Box, Wedge, Column, Circle).",
-	"last_updated": "2026-08-23T00:00:00.000Z"
+	"last_updated": "2026-09-04T19:00:00.000Z"
 }

@@ -1,7 +1,10 @@
-# Energy Conversion Meter
+# Energy Meter 2.0
+
+**Developer:** reforged25-source / Codex (orig: Egzothicki)  
+**Version:** 2.0  
 
 ## Introduction
-Are your converters starving, or is your energy excessively oveflowing?
+Are your converters starving, or is your energy excessively overflowing?
 This meter tells you whether your **energy production and energy conversion are balanced** at a glance, and loudly when it really matters - now also adjustable in settings!
 
 ## What it shows

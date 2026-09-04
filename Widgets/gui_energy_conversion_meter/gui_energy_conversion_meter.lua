@@ -2,10 +2,11 @@ local widget = widget ---@type Widget
 
 function widget:GetInfo()
     return {
-        name = "Energy Conversion Meter",
-        desc = "9-bar meter next to the top bar showing your energy<->converter balance: green center = balanced, bars ramp yellow -> red as the imbalance grows. Right = energy going unconverted (Overflowing), left = converter capacity starved (Idle converters). Severity is relative to your E income; shows the E/s value, plus a small hint text at 3+ bars. Energy/converters actively under construction already count as fixed (blueprints don't). Holding 3+ bars for ~5s pops an on-screen alert; pinned at 4 bars it repeats every 20s and the side icon pulses red. Alerts are configurable in Settings > Custom (on/off, spectating, size, sound). Ctrl + left-click drag repositions the meter (saved).",
-        author = "Egzothicki",
-        date = "July 2026",
+        name = "Energy Meter 2.0",
+        desc = "9-bar meter next to the top bar showing your energy<->converter balance: green center = balanced, bars ramp yellow -> red as the imbalance grows. (v2.0 by reforged25-source)",
+        author = "reforged25-source / Codex (orig: Egzothicki)",
+        version = "2.0",
+        date = "2026 (v2.0)",
         license = "GNU GPL, v2 or later",
         layer = 100,
         enabled = true,
@@ -64,7 +65,7 @@ local CONV_NOTIF_SIZES = { -- notification font size at 1080p: { level-4 strong,
 local BUILD_ACTIVE_GRACE = 3
 
 --------------------------------------------------------------------------------
--- User settings (Settings > Custom > Energy Conversion Meter)
+-- User settings (Settings > Custom > Energy Meter 2.0)
 --------------------------------------------------------------------------------
 local config = {
     notifEnabled = true, -- pop the on-screen alert at sustained 3+ bars
@@ -130,7 +131,7 @@ local function RegisterOptions()
     for _, spec in ipairs(OPTION_SPECS) do
         list[#list + 1] = {
             id = GetOptionId(spec),
-            widgetname = "Energy Conversion Meter",
+            widgetname = "Energy Meter 2.0",
             name = spec.name,
             description = spec.description,
             type = spec.type,
@@ -537,7 +538,7 @@ function widget:Update(dt)
     end
 end
 
-local CONV_TIP_TITLE = "Energy Conversion Meter"
+local CONV_TIP_TITLE = "Energy Meter 2.0"
 local function ConvTooltipText()
     return "Shows how much out of balance you are in Energy Conversion"
         .. " (Overflowing vs Idle Converters). Ctrl + left mouse click to drag it"

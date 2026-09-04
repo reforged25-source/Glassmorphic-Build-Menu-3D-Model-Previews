@@ -2,10 +2,11 @@ local widget = widget ---@type Widget
 
 function widget:GetInfo()
 	return {
-		name = "Custom Build Menu",
-		desc = "A translucent four-category construction and factory purchase menu.",
-		author = "Codex",
-		date = "2026",
+		name = "Build Menu 2.0",
+		desc = "A translucent four-category construction and factory purchase menu with rotating 3D unit previews and categorized tabs. (v2.0 by reforged25-source)",
+		author = "reforged25-source / Codex",
+		version = "2.0",
+		date = "2026 (v2.0)",
 		license = "GNU GPL, v2 or later",
 		layer = -100,
 		enabled = true,
